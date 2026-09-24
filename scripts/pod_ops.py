@@ -20,6 +20,7 @@ import argparse
 import base64
 import io
 import json
+import re
 import secrets
 import subprocess
 import sys
@@ -44,16 +45,27 @@ def _state() -> dict:
     return json.loads(STATE.read_text())
 
 
+ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07")
+
+
 def run(st: dict, script: str, timeout: int = 600) -> str:
-    """Run a bash script on the pod and return its (decoded) output."""
+    """Run a bash script on the pod; return only its output (gateway banner, prompts, echo stripped)."""
+    tag = secrets.token_hex(4)
+    begin, end = f"__BEGIN_{tag}__", f"__END_{tag}__"
+    # printf splits each marker so the echoed command line never contains the full marker text
+    body = f"printf '%s%s\\n' __BEGIN_ {tag}__\n{script}\nprintf '%s%s\\n' __END_ {tag}__"
     if st["mode"] == "proxy":
         cmd = ["ssh", "-tt", *SSH_OPTS, f"{st['host']}@ssh.runpod.io"]
-        stdin = f"stty -echo 2>/dev/null\n{script}\nexit\n"
+        stdin = f"stty -echo 2>/dev/null\n{body}\nexit\n"
     else:
         cmd = ["ssh", *SSH_OPTS, "-p", str(st["port"]), f"root@{st['ip']}", "bash -s"]
-        stdin = script
+        stdin = body
     proc = subprocess.run(cmd, input=stdin.encode(), capture_output=True, timeout=timeout, check=False)
-    return (proc.stdout + proc.stderr).decode(errors="replace").replace("\r\n", "\n")
+    out = ANSI.sub("", (proc.stdout + proc.stderr).decode(errors="replace").replace("\r\n", "\n"))
+    if begin in out:
+        out = out[out.index(begin) + len(begin):]
+        out = out[: out.index(end)] if end in out else out
+    return out.strip("\n")
 
 
 def _pod_host_id(pod_id: str) -> str | None:

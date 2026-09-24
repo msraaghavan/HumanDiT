@@ -7,15 +7,15 @@ __pycache__/
 .ruff_cache/
 
 # Data, caches, outputs (never commit datasets or large artifacts)
-data/
-cache/
-runs/
-outputs/
-checkpoints/
-pretrained/
-wandb/
-Generated_Images/
-Humans/
+/data/
+/cache/
+/runs/
+/outputs/
+/checkpoints/
+/pretrained/
+/wandb/
+/Generated_Images/
+/Humans/
 *.pth
 *.pt
 *.ckpt
