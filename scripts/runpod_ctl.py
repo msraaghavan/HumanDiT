@@ -55,6 +55,7 @@ def _request(method: str, url: str, body: dict | None = None) -> dict:
     req = urllib.request.Request(url, data=data, method=method)
     req.add_header("Authorization", f"Bearer {_key()}")
     req.add_header("Content-Type", "application/json")
+    req.add_header("User-Agent", "humandit-runpod-ctl/0.1 (+python-urllib)")  # Cloudflare blocks the default UA
     try:
         with urllib.request.urlopen(req, timeout=60) as r:
             txt = r.read().decode()
