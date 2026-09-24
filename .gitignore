@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Data, caches, outputs (never commit datasets or large artifacts)
+data/
+cache/
+runs/
+outputs/
+checkpoints/
+pretrained/
+wandb/
+Generated_Images/
+Humans/
+*.pth
+*.pt
+*.ckpt
+*.safetensors
+*.onnx
+*.npy
+*.npz
+*.memmap
+
+# Duplicate of the original zip extraction
+Human_Gan-main/
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
