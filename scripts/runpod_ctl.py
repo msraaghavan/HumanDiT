@@ -65,8 +65,8 @@ def _request(method: str, url: str, body: dict | None = None) -> dict:
         sys.exit(f"RunPod API error {e.code}: {e.read().decode()[:500]}")
 
 
-def gql(query: str) -> dict:
-    out = _request("POST", GRAPHQL, {"query": query})
+def gql(query: str, variables: dict | None = None) -> dict:
+    out = _request("POST", GRAPHQL, {"query": query, "variables": variables or {}})
     if "errors" in out:
         sys.exit(f"GraphQL error: {out['errors']}")
     return out["data"]
@@ -87,6 +87,21 @@ def cmd_gpus(_: argparse.Namespace) -> None:
             stock = (r.get("lowestPrice") or {}).get("stockStatus")
             print(f"{r['id']:<28} {r['memoryInGb']:>3} GB  community ${r['communityPrice'] or 0:.2f}/h  "
                   f"secure ${r['securePrice'] or 0:.2f}/h  stock={stock}")
+
+
+def cmd_add_ssh_key(a: argparse.Namespace) -> None:
+    """Append a public key to the account's SSH keys (same logic as runpodctl's AddPublicSSHKey)."""
+    new = Path(a.pubkey).expanduser().read_text().strip()
+    raw = gql("query { myself { pubKey } }")["myself"].get("pubKey") or ""
+    if any(line.strip() == new for line in raw.splitlines()):
+        print("key already registered")
+        return
+    sep = "\n\n"  # runpodctl joins account keys with a blank line
+    keys = (raw.strip() + sep if raw.strip() else "") + new
+    gql("mutation M($input: UpdateUserSettingsInput) { updateUserSettings(input: $input) { id } }",
+        {"input": {"pubKey": keys}})
+    n = len([line for line in keys.splitlines() if line.strip()])
+    print(f"added {new.split()[-1]} ({n} account keys total; existing keys kept)")
 
 
 def cmd_create(a: argparse.Namespace) -> None:
@@ -140,6 +155,9 @@ def main() -> None:
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("balance").set_defaults(fn=cmd_balance)
     sub.add_parser("gpus").set_defaults(fn=cmd_gpus)
+    k = sub.add_parser("add-ssh-key")
+    k.add_argument("--pubkey", default="~/.ssh/runpod_humandit_ed25519.pub")
+    k.set_defaults(fn=cmd_add_ssh_key)
     c = sub.add_parser("create")
     c.add_argument("--gpu", default="NVIDIA GeForce RTX 4090")
     c.add_argument("--cloud", default="COMMUNITY", choices=["COMMUNITY", "SECURE"])
