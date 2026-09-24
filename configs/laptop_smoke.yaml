@@ -1,0 +1,22 @@
+# GTX 1650 Ti (4 GB) smoke test: DiT^DH-S must overfit 1024 cached FFHQ faces.
+run_name: laptop_smoke
+data:
+  limit: 1024
+  in_memory: true
+  num_workers: 0
+model:
+  preset: S
+  grad_checkpointing: true
+train:
+  batch_size: 16
+  max_steps: 3000
+  lr: 3.0e-4
+  final_lr: 3.0e-5
+  ema_halflife_samples: 5000
+  precision: fp32
+log:
+  every: 25
+  sample_every: 1000
+  sample_steps: 30
+  ckpt_every_min: 10
+  decoder_device: cpu   # keep the 415M-param decoder off the 4 GB GPU while training

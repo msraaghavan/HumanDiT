@@ -1,0 +1,17 @@
+# Main teacher run on one RunPod GPU (bf16 + torch.compile). Steps are fitted to the budget at start.
+run_name: teacher_b
+data:
+  cache: cache/ffhq256
+  num_workers: 8
+model:
+  preset: B
+train:
+  batch_size: 256
+  micro_batch: auto
+  max_steps: 60000
+  compile: true
+log:
+  every: 100
+  sample_every: 4000
+  ckpt_every_min: 20
+  decoder_device: cuda

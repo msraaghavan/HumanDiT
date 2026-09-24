@@ -1,0 +1,41 @@
+# Defaults shared by every run; per-run configs override these keys.
+run_name: base
+out_dir: runs
+seed: 0
+data:
+  cache: cache/ffhq256
+  limit: null
+  in_memory: false
+  num_workers: 8
+model:
+  preset: B
+  overrides: {}
+  grad_checkpointing: false
+train:
+  batch_size: 256
+  micro_batch: auto          # gradient accumulation; halves automatically on OOM at step 1
+  max_steps: 60000
+  lr: 2.0e-4
+  final_lr: 2.0e-5
+  const_frac: 0.3125       # RAEv2: constant for 25/80 epochs,
+  decay_end_frac: 0.625    #        linear decay until 50/80, then constant
+  optimizer: cmuon         # cmuon | muon | adamw
+  ema_halflife_samples: 1.4e6   # RAEv2: decay 0.9995 at batch 1024 ~= 1.42M-sample half-life
+  clip_grad: 1.0
+  ig_coeff: 1.0
+  cfg_drop: 0.1
+  attr_drop: 0.3
+  precision: auto          # bf16 on sm>=80, fp32 on older GPUs (fp16 is slower than fp32 on TU117)
+  compile: false
+budget:
+  usd_per_hour: null
+  budget_usd: null
+  reserve_hours: 0.0
+  max_train_hours: null
+log:
+  every: 100
+  sample_every: 5000
+  sample_steps: 50
+  ckpt_every_min: 30
+  decode_samples: true
+  decoder_device: cuda
