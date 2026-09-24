@@ -124,11 +124,39 @@ def create(a: argparse.Namespace) -> dict:
     return st
 
 
+def check_host(st: dict, min_power_w: float) -> tuple[bool, str]:
+    """Reject power-capped or already-busy GPUs (seen on Community hosts) before spending anything on them."""
+    q = "nvidia-smi --query-gpu=name,power.limit,utilization.gpu,memory.used --format=csv,noheader,nounits"
+    rows = [run(st, q), run(st, f"sleep 5; {q}")]
+    try:
+        vals = [[x.strip() for x in r.strip().splitlines()[-1].split(",")] for r in rows]
+        name, power = vals[0][0], float(vals[0][1])
+        util, mem = max(float(v[2]) for v in vals), max(float(v[3]) for v in vals)
+    except (ValueError, IndexError):
+        return False, f"could not parse nvidia-smi output: {rows}"
+    msg = f"{name}: power limit {power:.0f} W, utilisation {util:.0f}%, memory in use {mem:.0f} MiB"
+    healthy = power >= min_power_w and util <= 10 and mem <= 1024
+    return healthy, msg
+
+
 def launch(a: argparse.Namespace) -> None:
     if STATE.exists() and not a.force:
         sys.exit(".pod.json exists (a pod may already be running); use --force to launch another")
-    st = wait_ready(create(a))
-    STATE.write_text(json.dumps(st, indent=2))
+    for attempt in range(1, a.max_hosts + 1):
+        st = wait_ready(create(a))
+        STATE.write_text(json.dumps(st, indent=2))
+        healthy, msg = check_host(st, a.min_power_w)
+        print(f"[pod] host check ({attempt}/{a.max_hosts}): {msg} -> {'OK' if healthy else 'REJECTED'}", flush=True)
+        if healthy:
+            break
+        if not a.auto_reject:
+            rp._request("POST", f"{rp.REST}/pods/{st['id']}/stop")
+            sys.exit("unhealthy host: pod stopped (not deleted); re-run with --auto-reject to replace it")
+        rp._request("DELETE", f"{rp.REST}/pods/{st['id']}")  # brand-new pod: nothing on it yet
+        STATE.unlink()
+        print(f"[pod] terminated unhealthy pod {st['id']}; requesting another host", flush=True)
+    else:
+        sys.exit(f"no healthy host after {a.max_hosts} attempts")
     push(a)
     start(a)
 
@@ -226,6 +254,9 @@ def main() -> None:
     la.add_argument("--auto-stop", action="store_true", default=True)
     la.add_argument("--grace-min", type=int, default=60)
     la.add_argument("--force", action="store_true")
+    la.add_argument("--min-power-w", type=float, default=300, help="reject GPUs power-capped below this")
+    la.add_argument("--auto-reject", action="store_true", help="terminate unhealthy fresh pods and retry")
+    la.add_argument("--max-hosts", type=int, default=4)
     la.set_defaults(fn=launch)
     sub.add_parser("push").set_defaults(fn=push)
     lg = sub.add_parser("logs")

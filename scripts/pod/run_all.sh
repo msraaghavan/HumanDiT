@@ -19,7 +19,9 @@ mkdir -p "$DATA" "$CACHE" "$RUNS" "$LOGS" "$STATE"
 BUDGET_USD=${BUDGET_USD:-4.0}; USD_PER_HOUR=${USD_PER_HOUR:-0.34}; STUDENT_MIN=${STUDENT_MIN:-45}
 NW=$(( $(nproc) > 12 ? 12 : $(nproc) ))
 [ -f "$STATE/start_epoch" ] || date +%s > "$STATE/start_epoch"
-PY="uv run python -u"
+# The env is built once by setup.sh (torch wheel matched to the host driver). --no-sync keeps later
+# code updates (which ship the original pyproject/uv.lock) from silently re-syncing a different torch.
+PY="uv run --no-sync python -u"
 
 if [ "$DRY" = 1 ]; then  # tiny sizes: every code path runs, nothing is meaningful
   FFHQ_ARGS="--shards 1 --limit 96 --batch 8 --workers 0"; CELEBA_ARGS="--shards 1 --limit 160 --batch 8 --workers 0"
@@ -45,7 +47,7 @@ stage() {  # stage <name> <command...>
 }
 
 teacher_hours() {  # remaining budget minus time reserved for the stages after the teacher
-  uv run python - "$BUDGET_USD" "$USD_PER_HOUR" "$STATE/start_epoch" "$STUDENT_MIN" <<'PY'
+  uv run --no-sync python - "$BUDGET_USD" "$USD_PER_HOUR" "$STATE/start_epoch" "$STUDENT_MIN" <<'PY'
 import sys, time
 budget, rate, start, smin = float(sys.argv[1]), float(sys.argv[2]), float(open(sys.argv[3]).read()), float(sys.argv[4])
 used = (time.time() - start) / 3600

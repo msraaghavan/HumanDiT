@@ -12,4 +12,18 @@ if [ "${drv:-0}" -lt 13 ]; then
   uv lock -q
 fi
 uv sync --extra eval -q
-uv run python -c "import torch; print('[setup] torch', torch.__version__, 'cuda', torch.version.cuda, torch.cuda.get_device_name(), 'bf16', torch.cuda.is_bf16_supported())"
+uv run --no-sync python - <<'PY'
+import torch
+assert torch.cuda.is_available(), "CUDA unavailable: torch wheel does not match the host driver"
+x = torch.randn(4096, 4096, device="cuda", dtype=torch.bfloat16)
+for _ in range(3):
+    x @ x
+torch.cuda.synchronize()
+import time
+t = time.perf_counter()
+for _ in range(20):
+    x @ x
+torch.cuda.synchronize()
+tflops = 2 * 4096**3 * 20 / (time.perf_counter() - t) / 1e12
+print(f"[setup] torch {torch.__version__} cuda {torch.version.cuda} on {torch.cuda.get_device_name()}: bf16 GEMM {tflops:.0f} TFLOPS")
+PY
