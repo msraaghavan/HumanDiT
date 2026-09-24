@@ -1,0 +1,15 @@
+# Hardware notes (measured, not assumed)
+
+## Laptop: GTX 1650 Ti (TU117, sm_75, 4 GB), torch 2.14.0+cu130, Windows 11
+
+| Measurement | Result |
+|---|---|
+| `torch.cuda.get_arch_list()` | sm_75 … sm_120 (sm_75 native) |
+| GEMM 4096² fp32 | **1.72 TFLOPS** |
+| GEMM 4096² fp16 | **0.41 TFLOPS** (4× *slower* than fp32: no tensor cores, no fast HGEMM path) |
+| `is_bf16_supported()` | True, but emulated; not useful |
+| SDPA FlashAttention | unavailable (needs sm_80+) |
+| SDPA memory-efficient / math | available |
+
+**Consequence:** the precision policy uses **fp32 on sm_75**, and bf16 autocast only on sm ≥ 80 (the RunPod GPU).
+The laptop is used for development, tests, smoke runs, and the demo; main training runs on RunPod.
