@@ -51,7 +51,7 @@ def test_gan_losses_backprop_to_generator_only_through_heads():
     tr = Transport()
     real, attrs = torch.randn(2, 1024, 16, 16), torch.zeros(2, 3, dtype=torch.long)
     fake = torch.randn(2, 1024, 16, 16, requires_grad=True)
-    ld, info = d_loss(disc, real, attrs, fake, attrs, tr, r1_weight=1.0, r1_sigma=0.01)
+    ld, _ = d_loss(disc, real, attrs, fake, attrs, tr, r1_weight=1.0, r1_sigma=0.01)
     ld.backward()
     assert all(p.grad is None for p in disc.trunk.parameters())
     assert any(p.grad is not None for p in disc.heads.parameters())

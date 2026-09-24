@@ -73,6 +73,8 @@ done
 stage package bash -c "cd '$KEEP' && tar czf results.tar.gz --exclude='*.pt' --exclude='latest.pt' --exclude='*_images' runs logs && ls -la results.tar.gz"
 echo "[run_all] ALL STAGES COMPLETE ($(date -u +%H:%M:%S))"
 if [ "${AUTO_STOP:-0}" = 1 ] && [ -n "${RUNPOD_POD_ID:-}" ]; then
+  # Give the operator time to copy results (they touch $STATE/pulled), then stop to end GPU billing.
+  for _ in $(seq 1 "${GRACE_MIN:-60}"); do [ -f "$STATE/pulled" ] && break; sleep 60; done
   echo "[run_all] stopping pod $RUNPOD_POD_ID (volume kept; terminate after copying results)"
   runpodctl stop pod "$RUNPOD_POD_ID" || true
 fi

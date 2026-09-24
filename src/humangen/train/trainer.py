@@ -59,7 +59,6 @@ class Trainer:
         (self.out / "ckpt").mkdir(parents=True, exist_ok=True)
         (self.out / "samples").mkdir(exist_ok=True)
         torch.manual_seed(cfg.seed)
-        np.random.seed(cfg.seed)
         self.prec = get_precision(cfg.train.precision if cfg.train.precision != "auto" else None)
         self.dev = self.prec.device
 

@@ -77,7 +77,6 @@ def latent_feature_maps(z: torch.Tensor) -> dict[str, torch.Tensor]:
 
     The RAEv2 latent is itself a DINOv3 representation, so no extra feature network is needed.
     """
-    b, c, _, _ = z.shape
     feats = {"tokens": z.flatten(2).transpose(1, 2)}
     for k in (2, 4):
         p = F.avg_pool2d(z, k)

@@ -20,15 +20,15 @@ import torch
 from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from watermark import add_watermark, check_watermark, provenance_pnginfo  # noqa: E402
+from watermark import add_watermark, check_watermark, provenance_pnginfo
 
-from humangen.data.attributes import Probe  # noqa: E402
-from humangen.diffusion.guidance import GuidanceConfig, guided_model_fn  # noqa: E402
-from humangen.diffusion.transport import Transport, dimension_shift  # noqa: E402
-from humangen.eval.generate import load_generator, one_step_sampler  # noqa: E402
-from humangen.models.layers import AttributeTokens  # noqa: E402
-from humangen.rae import RAE  # noqa: E402
-from humangen.utils.device import get_precision  # noqa: E402
+from humangen.data.attributes import Probe
+from humangen.diffusion.guidance import GuidanceConfig, guided_model_fn
+from humangen.diffusion.transport import Transport, dimension_shift
+from humangen.eval.generate import load_generator, one_step_sampler
+from humangen.models.layers import AttributeTokens
+from humangen.rae import RAE
+from humangen.utils.device import get_precision
 
 STATE = {"any": AttributeTokens.NULL, "yes": AttributeTokens.YES, "no": AttributeTokens.NO}
 
