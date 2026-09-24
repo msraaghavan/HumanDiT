@@ -51,6 +51,9 @@ flowchart LR
   strictly and matches the reference to **2.4e-7** max abs error.
 - **Reconstruction gate before spending money:** the released "general" decoder reconstructs FFHQ faces at PSNR
   27.2 dB / LPIPS 0.033 (500 images on the laptop). No face-specific decoder fine-tuning was needed.
+- **4 GB laptop smoke test:** DiT^DH-S learns faces from 256 images in 1.8 h. Its samples are measurably close to
+  the training set (as an overfit test should be), and Internal Guidance visibly sharpens them. See the
+  [write-up with figures](docs/laptop_smoke_test.md).
 - **Budget-aware training:** the trainer measures its own step time and fits the run to a dollar budget.
   Gradient accumulation backs off automatically on OOM, and every stage of the RunPod pipeline is idempotent and resumable.
 - **W-Flow adaptation:** the paper computes OT drift in MAE feature spaces. Here the RAEv2 latent *is* a DINOv3
