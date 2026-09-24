@@ -128,12 +128,13 @@ def check_host(st: dict, min_power_w: float) -> tuple[bool, str]:
     """Reject power-capped or already-busy GPUs (seen on Community hosts) before spending anything on them."""
     q = "nvidia-smi --query-gpu=name,power.limit,utilization.gpu,memory.used --format=csv,noheader,nounits"
     rows = [run(st, q), run(st, f"sleep 5; {q}")]
-    try:
-        vals = [[x.strip() for x in r.strip().splitlines()[-1].split(",")] for r in rows]
-        name, power = vals[0][0], float(vals[0][1])
-        util, mem = max(float(v[2]) for v in vals), max(float(v[3]) for v in vals)
-    except (ValueError, IndexError):
+    csv_row = re.compile(r"^\s*([^,\n]+?),\s*([\d.]+),\s*(\d+),\s*(\d+)\s*$", re.M)  # ignore prompt lines
+    found = [csv_row.search(r.replace("\r", "")) for r in rows]
+    if not all(found):
         return False, f"could not parse nvidia-smi output: {rows}"
+    vals = [m.groups() for m in found]
+    name, power = vals[0][0], float(vals[0][1])
+    util, mem = max(float(v[2]) for v in vals), max(float(v[3]) for v in vals)
     msg = f"{name}: power limit {power:.0f} W, utilisation {util:.0f}%, memory in use {mem:.0f} MiB"
     healthy = power >= min_power_w and util <= 10 and mem <= 1024
     return healthy, msg
@@ -157,6 +158,18 @@ def launch(a: argparse.Namespace) -> None:
         print(f"[pod] terminated unhealthy pod {st['id']}; requesting another host", flush=True)
     else:
         sys.exit(f"no healthy host after {a.max_hosts} attempts")
+    push(a)
+    start(a)
+
+
+def resume(a: argparse.Namespace) -> None:
+    """Continue with the pod in .pod.json: wait for SSH, check the host, ship code, start the pipeline."""
+    st = wait_ready(_state())
+    STATE.write_text(json.dumps(st, indent=2))
+    healthy, msg = check_host(st, a.min_power_w)
+    print(f"[pod] host check: {msg} -> {'OK' if healthy else 'REJECTED'}", flush=True)
+    if not healthy:
+        sys.exit("unhealthy host; not starting (use launch --auto-reject to replace it)")
     push(a)
     start(a)
 
@@ -258,6 +271,12 @@ def main() -> None:
     la.add_argument("--auto-reject", action="store_true", help="terminate unhealthy fresh pods and retry")
     la.add_argument("--max-hosts", type=int, default=4)
     la.set_defaults(fn=launch)
+    rs = sub.add_parser("resume")
+    for flag, kw in (("--budget", dict(type=float, required=True)), ("--disk-usd-per-hour", dict(type=float, default=0.03)),
+                     ("--student-min", dict(type=float, default=45)), ("--grace-min", dict(type=int, default=60)),
+                     ("--min-power-w", dict(type=float, default=300))):
+        rs.add_argument(flag, **kw)
+    rs.set_defaults(fn=resume, auto_stop=True)
     sub.add_parser("push").set_defaults(fn=push)
     lg = sub.add_parser("logs")
     lg.add_argument("-n", type=int, default=40)
