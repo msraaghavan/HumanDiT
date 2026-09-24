@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import time
@@ -130,15 +131,9 @@ def main() -> None:
         if preview:
             save_image(torch.cat(preview)[:64], out / f"{args.tag}_grid.png", nrow=8, padding=2)
 
-    if "fid" in metrics:
-        from cleanfid import fid
-
-        for mode in ("clean", "legacy_tensorflow"):
-            result[f"fid_{mode}"] = round(fid.compute_fid(
-                str(img_dir), dataset_name="ffhq", dataset_res=256, dataset_split="trainval70k", mode=mode,
-                num_workers=8, verbose=False), 3)
-            print(f"[eval] FID ({mode}) = {result[f'fid_{mode}']}", flush=True)
-
+    # Free GPU memory between metric networks (the decoder alone is 415M params; matters on small GPUs).
+    rae.cpu()
+    torch.cuda.empty_cache()
     if dino is not None:
         mu_r, sig_r, sub_r = real_dinov2_stats(dino, args.data, out / "ffhq256_dinov2_real.npz", dev, 10000, args.real_limit)
         g = torch.cat(dfeats).numpy()
@@ -150,6 +145,22 @@ def main() -> None:
             pr = knn_precision_recall(torch.from_numpy(sub_r[:m]).to(dev), torch.from_numpy(g[:m]).to(dev))
             result.update({k2: round(v, 4) for k2, v in pr.items()})
             print(f"[eval] precision {pr['precision']:.3f} recall {pr['recall']:.3f}", flush=True)
+        del dino
+        torch.cuda.empty_cache()
+
+    if "fid" in metrics:
+        from cleanfid import fid
+
+        # clean-fid 0.1.35 calls scipy.linalg.sqrtm(..., disp=False), removed in SciPy 1.18; use the same
+        # formula without that argument (tests/test_metrics.py checks it against a closed form).
+        fid.frechet_distance = frechet_distance
+        for mode in ("clean", "legacy_tensorflow"):
+            result[f"fid_{mode}"] = round(fid.compute_fid(
+                str(img_dir), dataset_name="ffhq", dataset_res=256, dataset_split="trainval70k", mode=mode,
+                num_workers=0 if os.name == "nt" else 8, verbose=False), 3)  # spawn can't pickle clean-fid's resizer
+            print(f"[eval] FID ({mode}) = {result[f'fid_{mode}']}", flush=True)
+        torch.cuda.empty_cache()
+    rae.to(dev)
 
     # ---------------------------------------------------------------- memorisation audit (DINOv3 space)
     if "memo" in metrics and pooled:

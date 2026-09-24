@@ -15,7 +15,7 @@ from scipy import linalg
 
 def frechet_distance(mu1: np.ndarray, s1: np.ndarray, mu2: np.ndarray, s2: np.ndarray) -> float:
     diff = mu1 - mu2
-    covmean, _ = linalg.sqrtm(s1 @ s2, disp=False)
+    covmean = linalg.sqrtm(s1 @ s2)  # SciPy >= 1.18: `disp` argument removed
     if not np.isfinite(covmean).all():
         eps = np.eye(s1.shape[0]) * 1e-6
         covmean = linalg.sqrtm((s1 + eps) @ (s2 + eps))

@@ -45,7 +45,7 @@ stage() {  # stage <name> <command...>
 }
 
 teacher_hours() {  # remaining budget minus time reserved for the stages after the teacher
-  python3 - "$BUDGET_USD" "$USD_PER_HOUR" "$STATE/start_epoch" "$STUDENT_MIN" <<'PY'
+  uv run python - "$BUDGET_USD" "$USD_PER_HOUR" "$STATE/start_epoch" "$STUDENT_MIN" <<'PY'
 import sys, time
 budget, rate, start, smin = float(sys.argv[1]), float(sys.argv[2]), float(open(sys.argv[3]).read()), float(sys.argv[4])
 used = (time.time() - start) / 3600
@@ -61,7 +61,7 @@ stage attributes bash -c "$PY scripts/build_attributes.py --cache '$CACHE' $ATTR
 stage rae_gate $PY scripts/rae_reconstruction_gate.py --data "$DATA/ffhq-256" $GATE_ARGS --out "$RUNS/rae_gate"
 TH=$(teacher_hours); echo "[run_all] teacher budget: $TH h"
 CFG=configs/pod_teacher_b.yaml
-stage teacher $PY scripts/train.py $CFG out_dir="$RUNS" data.cache="$CACHE/ffhq256" budget.max_train_hours="$TH" $TEACHER_ARGS
+stage teacher $PY scripts/train.py $CFG out_dir="$RUNS" data.cache="$CACHE/ffhq256" budget.max_train_hours="$TH" budget.usd_per_hour="$USD_PER_HOUR" $TEACHER_ARGS
 T=$RUNS/teacher_b/ckpt/ema.safetensors
 EV="--data $DATA/ffhq-256 --cache $CACHE/ffhq256 --probe $CACHE/attribute_probe.pt --out $RUNS/eval"
 stage eval_teacher $PY scripts/evaluate.py --ckpt "$T" --tag teacher $EV $EVAL_ARGS
