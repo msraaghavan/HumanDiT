@@ -12,7 +12,14 @@ import torch.nn.functional as F
 from torch import nn
 from torch.utils.checkpoint import checkpoint
 
-from humangen.models.layers import AttributeTokens, FinalLayer, FourierTimeTokens, HeadBlock, RoPE2D, TrunkBlock
+from humangen.models.layers import (
+    AttributeTokens,
+    FinalLayer,
+    FourierTimeTokens,
+    HeadBlock,
+    RoPE2D,
+    TrunkBlock,
+)
 
 
 @dataclass(frozen=True)
@@ -40,9 +47,9 @@ class DiTDHConfig:
 
 
 PRESETS: dict[str, dict] = {
-    # ~174M params; trunk = DiT-B.
+    # 182.9M params (trunk = DiT-B width/depth, 2-block 1536-wide DDT head).
     "B": {},
-    # ~62M params; for laptop smoke tests.
+    # 65.1M params; laptop smoke tests.
     "S": dict(trunk_dim=384, trunk_heads=6, head_dim=1024, head_heads=8),
     # tiny; unit tests only.
     "T": dict(trunk_dim=64, trunk_depth=4, trunk_heads=2, head_dim=128, head_heads=2, ig_depth=2),

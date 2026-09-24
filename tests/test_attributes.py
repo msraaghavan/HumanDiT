@@ -1,7 +1,14 @@
 import numpy as np
 import torch
 
-from humangen.data.attributes import INVERT, Probe, calibrate_abstention, evaluate, fit_linear_probe, select_attributes
+from humangen.data.attributes import (
+    INVERT,
+    Probe,
+    calibrate_abstention,
+    evaluate,
+    fit_linear_probe,
+    select_attributes,
+)
 
 
 def _synthetic(n=3000, d=32, k=3, seed=0):

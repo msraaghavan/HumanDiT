@@ -20,7 +20,13 @@ from PIL import Image
 from torchvision.utils import make_grid, save_image
 
 from humangen.data.parquet_images import decode_image, iter_rows, list_shards
-from humangen.rae.autoencoder import DECODER_DIR, ENCODER_WEIGHTS, LatentNormalizer, grid_to_tokens, tokens_to_grid
+from humangen.rae.autoencoder import (
+    DECODER_DIR,
+    ENCODER_WEIGHTS,
+    LatentNormalizer,
+    grid_to_tokens,
+    tokens_to_grid,
+)
 from humangen.rae.decoder import RAEDecoder
 from humangen.rae.encoder import DINOv3MultiLayerEncoder
 from humangen.utils.device import get_precision

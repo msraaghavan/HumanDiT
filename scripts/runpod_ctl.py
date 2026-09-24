@@ -113,7 +113,7 @@ def cmd_status(a: argparse.Namespace) -> None:
     for _ in range(a.wait // 10 + 1):
         pod = _request("GET", f"{REST}/pods/{a.pod_id}")
         ip, ports = pod.get("publicIp"), pod.get("portMappings") or {}
-        if ip and "22" in ports or not a.wait:
+        if (ip and "22" in ports) or not a.wait:
             break
         time.sleep(10)
     info = {k: pod.get(k) for k in ("id", "desiredStatus", "costPerHr", "publicIp", "portMappings", "lastStartedAt")}
