@@ -35,19 +35,20 @@ CANDIDATE_GPUS = [
 
 
 def _key() -> str:
-    key = os.environ.get("RUNPOD_API_KEY")
-    if not key:
-        path = Path.home() / ".runpod" / "api_key"
-        if not path.exists():
-            sys.exit("No RunPod API key: set RUNPOD_API_KEY or create ~/.runpod/api_key yourself.")
-        raw = path.read_bytes()
-        for enc in ("utf-8-sig", "utf-16"):
-            try:
-                key = raw.decode(enc).strip()
-                break
-            except UnicodeDecodeError:
-                continue
-    return key
+    """$RUNPOD_API_KEY if it looks like a real key (rpa_...), else ~/.runpod/api_key. Never printed."""
+    key = os.environ.get("RUNPOD_API_KEY", "").strip()
+    if key.startswith("rpa_"):
+        return key
+    path = Path.home() / ".runpod" / "api_key"
+    if not path.exists():
+        sys.exit("No RunPod API key: create ~/.runpod/api_key yourself (or set RUNPOD_API_KEY).")
+    raw = path.read_bytes()
+    for enc in ("utf-8-sig", "utf-16"):
+        try:
+            return raw.decode(enc).strip()
+        except UnicodeDecodeError:
+            continue
+    sys.exit("~/.runpod/api_key is not valid text")
 
 
 def _request(method: str, url: str, body: dict | None = None) -> dict:

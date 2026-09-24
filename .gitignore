@@ -36,3 +36,8 @@ Thumbs.db
 *.log
 .dryrun/
 .pod.json
+
+# secrets
+apikey*
+*.key
+.env
