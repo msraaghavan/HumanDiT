@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import torch
@@ -10,7 +11,7 @@ from torch import nn
 from humangen.rae.decoder import DecoderConfig, RAEDecoder
 from humangen.rae.encoder import DINOv3MultiLayerEncoder
 
-DEFAULT_ROOT = Path("pretrained/raev2")
+DEFAULT_ROOT = Path(os.environ.get("HUMANGEN_PRETRAINED", "pretrained/raev2"))
 ENCODER_WEIGHTS = "encoders/dinov3/dinov3_vitl16_pretrain_lvd1689m-8aa4cbdd.pth"
 DECODER_DIR = "stage1/general/dinov3l-k7"
 HF_REPO = "nyu-visionx/RAEv2-models"

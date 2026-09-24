@@ -35,6 +35,7 @@ def main() -> None:
     ap.add_argument("--cache", default="cache")
     ap.add_argument("--min-bacc", type=float, default=0.88)
     ap.add_argument("--max-k", type=int, default=12)
+    ap.add_argument("--min-count", type=int, default=20, help="min support for abstention thresholds")
     ap.add_argument("--min-precision", type=float, default=0.90)
     ap.add_argument("--min-npv", type=float, default=0.97)
     args = ap.parse_args()
@@ -54,7 +55,7 @@ def main() -> None:
     idx = [names.index(n) for n in chosen]
 
     p_val = torch.sigmoid(full.logits(torch.from_numpy(xva))).numpy()[:, idx]
-    lo, hi = calibrate_abstention(p_val, yva[:, idx], args.min_precision, args.min_npv)
+    lo, hi = calibrate_abstention(p_val, yva[:, idx], args.min_precision, args.min_npv, args.min_count)
     probe = Probe(chosen, w[idx], b[idx], mu, sigma, lo, hi)
     probe.save(cache / "attribute_probe.pt")
 

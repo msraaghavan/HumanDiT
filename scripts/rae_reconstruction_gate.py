@@ -22,6 +22,7 @@ from torchvision.utils import make_grid, save_image
 from humangen.data.parquet_images import decode_image, iter_rows, list_shards
 from humangen.rae.autoencoder import (
     DECODER_DIR,
+    DEFAULT_ROOT,
     ENCODER_WEIGHTS,
     LatentNormalizer,
     grid_to_tokens,
@@ -45,7 +46,7 @@ def load_images(data: str, n: int) -> torch.Tensor:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--data", default="data/ffhq-256")
-    ap.add_argument("--root", default="pretrained/raev2")
+    ap.add_argument("--root", default=str(DEFAULT_ROOT))
     ap.add_argument("--n", type=int, default=500)
     ap.add_argument("--batch", type=int, default=8)
     ap.add_argument("--out", default="outputs/rae_gate")

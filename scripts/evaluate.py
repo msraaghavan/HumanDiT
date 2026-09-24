@@ -30,14 +30,20 @@ from humangen.rae import RAE
 from humangen.utils.device import get_precision
 
 
-def real_dinov2_stats(feat: DINOv2Features, data: str, out: Path, dev, n_pr: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def real_dinov2_stats(
+    feat: DINOv2Features, data: str, out: Path, dev, n_pr: int, limit: int | None = None
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """DINOv2 features of all real FFHQ images (cached): (mu, sigma, subset for precision/recall)."""
     if out.exists():
         z = np.load(out)
         return z["mu"], z["sigma"], z["subset"]
-    feats, buf = [], []
+    feats, buf, seen = [], [], 0
     for batch in iter_rows(list_shards(data), ["image"], batch_rows=256):
-        buf.extend(decode_image(c, 256) for c in batch["image"])
+        if limit is not None and seen >= limit:
+            break
+        cells = batch["image"][: None if limit is None else limit - seen]
+        seen += len(cells)
+        buf.extend(decode_image(c, 256) for c in cells)
         while len(buf) >= 128:
             x = torch.from_numpy(np.stack(buf[:128])).permute(0, 3, 1, 2).to(dev).float() / 255
             feats.append(feat(x).cpu().numpy())
@@ -71,6 +77,7 @@ def main() -> None:
     ap.add_argument("--out", default="runs/eval")
     ap.add_argument("--keep-images", action="store_true")
     ap.add_argument("--control-n", type=int, default=256)
+    ap.add_argument("--real-limit", type=int, default=None, help="real images for DINOv2 stats (default: all)")
     args = ap.parse_args()
     metrics = set(args.metrics.split(","))
 
@@ -133,7 +140,7 @@ def main() -> None:
             print(f"[eval] FID ({mode}) = {result[f'fid_{mode}']}", flush=True)
 
     if dino is not None:
-        mu_r, sig_r, sub_r = real_dinov2_stats(dino, args.data, out / "ffhq256_dinov2_real.npz", dev, 10000)
+        mu_r, sig_r, sub_r = real_dinov2_stats(dino, args.data, out / "ffhq256_dinov2_real.npz", dev, 10000, args.real_limit)
         g = torch.cat(dfeats).numpy()
         if "fd_dinov2" in metrics:
             result["fd_dinov2"] = round(frechet_distance(*stats(g), mu_r, sig_r), 2)
