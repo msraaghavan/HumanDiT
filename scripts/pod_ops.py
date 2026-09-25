@@ -144,10 +144,13 @@ try:
 except Exception as e:
     print("PROBE_ERR", type(e).__name__, str(e)[:120].replace("\n", " "))
 PY
+# The pod's own RUNPOD_API_KEY is scoped to this pod: account queries (runpodctl get pod, REST) are refused,
+# but reading and stopping this pod over GraphQL work (runpodctl stop pod from inside verified 2026-09-25).
 export $(tr '\0' '\n' < /proc/1/environ | grep -E '^RUNPOD_(POD_ID|API_KEY)=' | xargs) 2>/dev/null
-if runpodctl get pod "$RUNPOD_POD_ID" >/dev/null 2>&1; then echo SELFSTOP runpodctl
-elif curl -fsS -o /dev/null -H "Authorization: Bearer $RUNPOD_API_KEY" "https://rest.runpod.io/v1/pods/$RUNPOD_POD_ID"; then echo SELFSTOP rest
-else echo SELFSTOP none; fi"""
+Q=$(printf '{"query":"query { pod(input: {podId: \\"%s\\"}) { id } }"}' "$RUNPOD_POD_ID")
+if command -v runpodctl >/dev/null && curl -fsS -H 'Content-Type: application/json' \
+    -H "Authorization: Bearer $RUNPOD_API_KEY" -d "$Q" https://api.runpod.io/graphql | grep -q "\"id\":\"$RUNPOD_POD_ID\""
+then echo SELFSTOP ok; else echo SELFSTOP none; fi"""
 
 
 def check_host(st: dict, min_power_w: float, min_tflops: float) -> tuple[bool, str]:

@@ -27,8 +27,11 @@ fi
 GUARD=0; [ "${AUTO_STOP:-0}" = 1 ] && [ -n "${RUNPOD_POD_ID:-}" ] && GUARD=1
 stop_pod() {  # stop (not terminate): GPU billing ends, the volume and results are kept
   echo "[run_all] stopping pod $RUNPOD_POD_ID: $1 ($(date -u +%H:%M:%S))"
+  # The pod-scoped RUNPOD_API_KEY may stop this pod (GraphQL podStop); REST and account queries are refused.
+  local q; q=$(printf '{"query":"mutation { podStop(input: {podId: \\"%s\\"}) { id } }"}' "$RUNPOD_POD_ID")
   runpodctl stop pod "$RUNPOD_POD_ID" \
-    || curl -fsS -X POST -H "Authorization: Bearer ${RUNPOD_API_KEY:-}" "https://rest.runpod.io/v1/pods/$RUNPOD_POD_ID/stop" \
+    || curl -fsS -H 'Content-Type: application/json' -H "Authorization: Bearer ${RUNPOD_API_KEY:-}" \
+         -d "$q" https://api.runpod.io/graphql \
     || echo "[run_all] WARNING: could not stop the pod"
 }
 on_exit() {
