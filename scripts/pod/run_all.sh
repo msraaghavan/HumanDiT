@@ -19,6 +19,39 @@ mkdir -p "$DATA" "$CACHE" "$RUNS" "$LOGS" "$STATE"
 BUDGET_USD=${BUDGET_USD:-4.0}; USD_PER_HOUR=${USD_PER_HOUR:-0.34}; STUDENT_MIN=${STUDENT_MIN:-45}
 NW=$(( $(nproc) > 12 ? 12 : $(nproc) ))
 [ -f "$STATE/start_epoch" ] || date +%s > "$STATE/start_epoch"
+
+# --- Spend guards: a failed stage or a hung pipeline must never leave a GPU billing. ---
+if [ -z "${RUNPOD_POD_ID:-}" ] && [ -r /proc/1/environ ]; then  # SSH sessions don't inherit the pod's env
+  while IFS= read -r kv; do export "$kv"; done < <(tr '\0' '\n' < /proc/1/environ | grep -E '^RUNPOD_(POD_ID|API_KEY)=' || true)
+fi
+GUARD=0; [ "${AUTO_STOP:-0}" = 1 ] && [ -n "${RUNPOD_POD_ID:-}" ] && GUARD=1
+stop_pod() {  # stop (not terminate): GPU billing ends, the volume and results are kept
+  echo "[run_all] stopping pod $RUNPOD_POD_ID: $1 ($(date -u +%H:%M:%S))"
+  runpodctl stop pod "$RUNPOD_POD_ID" \
+    || curl -fsS -X POST -H "Authorization: Bearer ${RUNPOD_API_KEY:-}" "https://rest.runpod.io/v1/pods/$RUNPOD_POD_ID/stop" \
+    || echo "[run_all] WARNING: could not stop the pod"
+}
+on_exit() {
+  local rc=$?
+  [ "$rc" = 0 ] && return
+  echo "[run_all] FAILED (exit $rc) at $(date -u +%H:%M:%S)"
+  [ "$GUARD" = 1 ] || return
+  # Leave a short window for debugging; touching $STATE/hold keeps the pod up (the budget deadman still applies).
+  for _ in $(seq 1 "${FAIL_GRACE_MIN:-20}"); do [ -f "$STATE/hold" ] && return; sleep 60; done
+  stop_pod "a stage failed and nobody claimed the pod within ${FAIL_GRACE_MIN:-20} min"
+}
+trap on_exit EXIT
+rm -f "$STATE/hold"
+if [ "$GUARD" = 1 ]; then  # deadman: stop at the budget whatever state the pipeline is in
+  LEFT=$(awk -v b="$BUDGET_USD" -v r="$USD_PER_HOUR" -v s="$(cat "$STATE/start_epoch")" -v n="$(date +%s)" \
+    'BEGIN { x = b / r * 3600 - (n - s); printf "%d", (x > 60 ? x : 60) }')
+  { [ -f "$STATE/deadman.pid" ] && kill "$(cat "$STATE/deadman.pid")"; } 2>/dev/null || true  # re-run: replace it
+  { sleep "$LEFT"; stop_pod "budget of \$$BUDGET_USD reached"; } &
+  echo $! > "$STATE/deadman.pid"
+  echo "[run_all] spend guards on: deadman stop in $(( LEFT / 60 )) min, failure stop after ${FAIL_GRACE_MIN:-20} min"
+else
+  echo "[run_all] spend guards OFF (AUTO_STOP=${AUTO_STOP:-0}, RUNPOD_POD_ID=${RUNPOD_POD_ID:-unset})"
+fi
 # The env is built once by setup.sh (torch wheel matched to the host driver). --no-sync keeps later
 # code updates (which ship the original pyproject/uv.lock) from silently re-syncing a different torch.
 PY="uv run --no-sync python -u"
@@ -74,9 +107,8 @@ for s in wflow gan; do
 done
 stage package bash -c "cd '$KEEP' && tar czf results.tar.gz --exclude='*.pt' --exclude='latest.pt' --exclude='*_images' runs logs && ls -la results.tar.gz"
 echo "[run_all] ALL STAGES COMPLETE ($(date -u +%H:%M:%S))"
-if [ "${AUTO_STOP:-0}" = 1 ] && [ -n "${RUNPOD_POD_ID:-}" ]; then
+if [ "$GUARD" = 1 ]; then
   # Give the operator time to copy results (they touch $STATE/pulled), then stop to end GPU billing.
   for _ in $(seq 1 "${GRACE_MIN:-60}"); do [ -f "$STATE/pulled" ] && break; sleep 60; done
-  echo "[run_all] stopping pod $RUNPOD_POD_ID (volume kept; terminate after copying results)"
-  runpodctl stop pod "$RUNPOD_POD_ID" || true
+  stop_pod "pipeline complete (volume kept; terminate after copying results)"
 fi

@@ -124,8 +124,34 @@ def create(a: argparse.Namespace) -> dict:
     return st
 
 
-def check_host(st: dict, min_power_w: float) -> tuple[bool, str]:
-    """Reject power-capped or already-busy GPUs (seen on Community hosts) before spending anything on them."""
+# Driver-level CUDA init, then a bf16 GEMM with the image's own torch (independent of our env), then whether
+# the pod can stop itself (the pipeline's spend guards depend on it). Seen on Community hosts: nvidia-smi
+# healthy but cuInit failing ("CUDA unknown error"), and GPUs power-capped or shared with invisible jobs.
+GPU_PROBE = r"""python3 - <<'PY' 2>&1 | grep -E '^(CUINIT|TFLOPS|PROBE_ERR)'
+import ctypes, time
+try:
+    r = ctypes.CDLL("libcuda.so.1").cuInit(0)
+except OSError as e:
+    r = f"no libcuda ({e})"
+print("CUINIT", r)
+try:
+    import torch
+    a = torch.randn(8192, 8192, device="cuda", dtype=torch.bfloat16); b = torch.randn_like(a)
+    for _ in range(5): a @ b
+    torch.cuda.synchronize(); t = time.time()
+    for _ in range(30): a @ b
+    torch.cuda.synchronize(); print("TFLOPS", round(2 * 8192**3 * 30 / (time.time() - t) / 1e12, 1))
+except Exception as e:
+    print("PROBE_ERR", type(e).__name__, str(e)[:120].replace("\n", " "))
+PY
+export $(tr '\0' '\n' < /proc/1/environ | grep -E '^RUNPOD_(POD_ID|API_KEY)=' | xargs) 2>/dev/null
+if runpodctl get pod "$RUNPOD_POD_ID" >/dev/null 2>&1; then echo SELFSTOP runpodctl
+elif curl -fsS -o /dev/null -H "Authorization: Bearer $RUNPOD_API_KEY" "https://rest.runpod.io/v1/pods/$RUNPOD_POD_ID"; then echo SELFSTOP rest
+else echo SELFSTOP none; fi"""
+
+
+def check_host(st: dict, min_power_w: float, min_tflops: float) -> tuple[bool, str]:
+    """Reject broken, power-capped or already-busy GPUs before spending anything on them."""
     q = "nvidia-smi --query-gpu=name,power.limit,utilization.gpu,memory.used --format=csv,noheader,nounits"
     rows = [run(st, q), run(st, f"sleep 5; {q}")]
     csv_row = re.compile(r"^\s*([^,\n]+?),\s*([\d.]+),\s*(\d+),\s*(\d+)\s*$", re.M)  # ignore prompt lines
@@ -135,8 +161,18 @@ def check_host(st: dict, min_power_w: float) -> tuple[bool, str]:
     vals = [m.groups() for m in found]
     name, power = vals[0][0], float(vals[0][1])
     util, mem = max(float(v[2]) for v in vals), max(float(v[3]) for v in vals)
-    msg = f"{name}: power limit {power:.0f} W, utilisation {util:.0f}%, memory in use {mem:.0f} MiB"
-    healthy = power >= min_power_w and util <= 10 and mem <= 1024
+    probe = run(st, GPU_PROBE, timeout=300)
+    cuinit = re.search(r"^CUINIT (\S+)", probe, re.M)
+    tflops = re.search(r"^TFLOPS ([\d.]+)", probe, re.M)
+    selfstop = re.search(r"^SELFSTOP (\w+)", probe, re.M)
+    cu_ok = bool(cuinit) and cuinit.group(1) == "0"
+    tf = float(tflops.group(1)) if tflops else 0.0
+    stop_ok = bool(selfstop) and selfstop.group(1) != "none"
+    err = re.search(r"^PROBE_ERR (.*)$", probe, re.M)
+    msg = (f"{name}: power limit {power:.0f} W, utilisation {util:.0f}%, memory in use {mem:.0f} MiB, "
+           f"cuInit {cuinit.group(1) if cuinit else '?'}, bf16 GEMM {tf:.0f} TFLOPS, "
+           f"self-stop {selfstop.group(1) if selfstop else '?'}" + (f" [{err.group(1)}]" if err else ""))
+    healthy = power >= min_power_w and util <= 10 and mem <= 1024 and cu_ok and tf >= min_tflops and stop_ok
     return healthy, msg
 
 
@@ -146,7 +182,7 @@ def launch(a: argparse.Namespace) -> None:
     for attempt in range(1, a.max_hosts + 1):
         st = wait_ready(create(a))
         STATE.write_text(json.dumps(st, indent=2))
-        healthy, msg = check_host(st, a.min_power_w)
+        healthy, msg = check_host(st, a.min_power_w, a.min_tflops)
         print(f"[pod] host check ({attempt}/{a.max_hosts}): {msg} -> {'OK' if healthy else 'REJECTED'}", flush=True)
         if healthy:
             break
@@ -166,7 +202,7 @@ def resume(a: argparse.Namespace) -> None:
     """Continue with the pod in .pod.json: wait for SSH, check the host, ship code, start the pipeline."""
     st = wait_ready(_state())
     STATE.write_text(json.dumps(st, indent=2))
-    healthy, msg = check_host(st, a.min_power_w)
+    healthy, msg = check_host(st, a.min_power_w, a.min_tflops)
     print(f"[pod] host check: {msg} -> {'OK' if healthy else 'REJECTED'}", flush=True)
     if not healthy:
         sys.exit("unhealthy host; not starting (use launch --auto-reject to replace it)")
@@ -268,13 +304,14 @@ def main() -> None:
     la.add_argument("--grace-min", type=int, default=60)
     la.add_argument("--force", action="store_true")
     la.add_argument("--min-power-w", type=float, default=300, help="reject GPUs power-capped below this")
+    la.add_argument("--min-tflops", type=float, default=100, help="reject GPUs below this bf16 GEMM rate (4090 ~150)")
     la.add_argument("--auto-reject", action="store_true", help="terminate unhealthy fresh pods and retry")
     la.add_argument("--max-hosts", type=int, default=4)
     la.set_defaults(fn=launch)
     rs = sub.add_parser("resume")
     for flag, kw in (("--budget", dict(type=float, required=True)), ("--disk-usd-per-hour", dict(type=float, default=0.03)),
                      ("--student-min", dict(type=float, default=45)), ("--grace-min", dict(type=int, default=60)),
-                     ("--min-power-w", dict(type=float, default=300))):
+                     ("--min-power-w", dict(type=float, default=300)), ("--min-tflops", dict(type=float, default=100))):
         rs.add_argument(flag, **kw)
     rs.set_defaults(fn=resume, auto_stop=True)
     sub.add_parser("push").set_defaults(fn=push)
