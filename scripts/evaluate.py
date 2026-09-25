@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import shutil
 import subprocess
 import time
@@ -25,7 +24,7 @@ from humangen.data.attributes import Probe
 from humangen.data.parquet_images import decode_image, iter_rows, list_shards
 from humangen.diffusion.guidance import GuidanceConfig
 from humangen.eval.generate import iterate_latents, load_generator, one_step_sampler, teacher_sampler
-from humangen.eval.metrics import DINOv2Features, frechet_distance, knn_precision_recall, stats
+from humangen.eval.metrics import DINOv2Features, cleanfid, frechet_distance, knn_precision_recall, stats
 from humangen.models.layers import AttributeTokens
 from humangen.rae import RAE
 from humangen.utils.device import get_precision
@@ -149,15 +148,11 @@ def main() -> None:
         torch.cuda.empty_cache()
 
     if "fid" in metrics:
-        from cleanfid import fid
-
-        # clean-fid 0.1.35 calls scipy.linalg.sqrtm(..., disp=False), removed in SciPy 1.18; use the same
-        # formula without that argument (tests/test_metrics.py checks it against a closed form).
-        fid.frechet_distance = frechet_distance
+        fid, workers = cleanfid()  # SciPy 1.18 + Python 3.14 workarounds; see humangen.eval.metrics.cleanfid
         for mode in ("clean", "legacy_tensorflow"):
             result[f"fid_{mode}"] = round(fid.compute_fid(
                 str(img_dir), dataset_name="ffhq", dataset_res=256, dataset_split="trainval70k", mode=mode,
-                num_workers=0 if os.name == "nt" else 8, verbose=False), 3)  # spawn can't pickle clean-fid's resizer
+                num_workers=workers, verbose=False), 3)
             print(f"[eval] FID ({mode}) = {result[f'fid_{mode}']}", flush=True)
         torch.cuda.empty_cache()
     rae.to(dev)

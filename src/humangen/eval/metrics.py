@@ -7,6 +7,8 @@ Precision/recall follows Kynkäänniemi et al. (2019) with k = 3.
 
 from __future__ import annotations
 
+import os
+
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -65,3 +67,22 @@ class DINOv2Features(torch.nn.Module):
     def forward(self, images01: torch.Tensor) -> torch.Tensor:
         x = F.interpolate(images01.float(), size=(224, 224), mode="bicubic", antialias=True, align_corners=False)
         return self.model((x.clamp(0, 1) - self.mean) / self.std)
+
+
+def cleanfid():
+    """clean-fid 0.1.35 made to work here; returns (cleanfid.fid module, num_workers).
+
+    * SciPy 1.18 removed `sqrtm(disp=)`, which clean-fid calls: use `frechet_distance` above instead.
+    * Its dataset holds a local resize function that spawn/forkserver workers cannot pickle. Forkserver is the
+      default on Linux since Python 3.14, so use fork there (the workers only decode and resize images and
+      never touch CUDA); Windows has no fork, so load in the main process.
+    """
+    from cleanfid import fid
+
+    fid.frechet_distance = frechet_distance
+    if os.name == "nt":
+        return fid, 0
+    import multiprocessing as mp
+
+    mp.set_start_method("fork", force=True)
+    return fid, 8

@@ -110,14 +110,16 @@ def main() -> None:
     }
 
     if args.rfid:
-        from cleanfid import fid
+        from humangen.eval.metrics import cleanfid
 
+        fid, workers = cleanfid()
         for name, t in (("orig", x), ("rec", rec)):
             d = out / name
             d.mkdir(exist_ok=True)
             for j, im in enumerate(t):
                 Image.fromarray((im.permute(1, 2, 0).numpy() * 255).round().astype(np.uint8)).save(d / f"{j:06d}.png")
-        metrics["rfid_clean"] = round(fid.compute_fid(str(out / "orig"), str(out / "rec"), mode="clean"), 4)
+        metrics["rfid_clean"] = round(fid.compute_fid(str(out / "orig"), str(out / "rec"), mode="clean",
+                                                       num_workers=workers, verbose=False), 4)
 
     k = min(16, len(x))
     grid = make_grid(torch.cat([x[:k], rec[:k]]), nrow=k, padding=2)
