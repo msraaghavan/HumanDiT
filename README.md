@@ -65,6 +65,13 @@ flowchart LR
 
   It also stops itself 20 min after any failed stage, and a deadman timer stops it at the dollar budget whatever
   state the pipeline is in.
+- **Don't judge early training by the EMA:** RAEv2's EMA half-life (1.4M samples) has no warm-up. At 1M samples the
+  EMA grid is flat grey, because 61% of the EMA is still the zero-initialised output layer. The raw weights at 0.72M
+  samples (40 min on the 4090) already make faces. The lag is gone by the end of the run (0.3% of the EMA is initial weights at 12M samples).
+
+  | EMA, 1.0M samples | raw weights, 0.72M samples |
+  |---|---|
+  | ![](docs/assets/teacher_ema_step4000.jpg) | ![](docs/assets/teacher_raw_step2808.jpg) |
 - **W-Flow adaptation:** the paper computes OT drift in MAE feature spaces. Here the RAEv2 latent *is* a DINOv3
   representation, so the multi-scale drift (tokens, 2×2 and 4×4 pools, global statistics) runs directly on
   generator outputs with no extra feature network. The loss is ported from the official MIT implementation.
