@@ -43,3 +43,14 @@ def test_probe_learns_and_abstains():
 def test_selection_excludes_subjective():
     m = {"Attractive": {"balanced_acc": 0.99}, "Eyeglasses": {"balanced_acc": 0.97}, "Smiling": {"balanced_acc": 0.8}}
     assert select_attributes(m, 0.88, 12) == ["Eyeglasses"]
+
+
+def test_calibration_reaches_rare_attributes():
+    """Rare attribute whose 90%-precision region lies above p = 0.99 (class-balanced probes do this)."""
+    rng = np.random.default_rng(0)
+    p = np.concatenate([rng.uniform(0.0, 0.995, 10000), rng.uniform(0.995, 1.0, 200)])[:, None]
+    y = np.concatenate([np.zeros(10000, bool), np.ones(200, bool)])[:, None]
+    lo, hi = calibrate_abstention(p, y, 0.9, 0.97)
+    present = p[:, 0] >= hi[0]
+    assert present.sum() >= 150 and y[present, 0].mean() >= 0.9
+    assert (p[:, 0] <= lo[0]).sum() > 9000  # confident "absent" region still found

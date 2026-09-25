@@ -114,22 +114,25 @@ def calibrate_abstention(
     p_val: np.ndarray, y_val: np.ndarray, min_precision: float, min_npv: float, min_count: int = 20
 ):
     """Per attribute: hi = lowest prob threshold with precision >= min_precision (present),
-    lo = highest threshold with NPV >= min_npv (absent)."""
+    lo = highest threshold with NPV >= min_npv (absent).
+
+    Every validation probability is a candidate threshold. The probe is trained class-balanced, so for rare
+    attributes (Bald, Mustache, ...) 90% precision is only reached above p = 0.99, which a fixed 0.01-0.99 grid
+    never tries (it left those attributes with no "present" labels at all).
+    """
     k = p_val.shape[1]
-    lo, hi = np.zeros(k), np.ones(k)
-    grid = np.linspace(0.01, 0.99, 99)
+    lo, hi = np.full(k, -1e-6), np.full(k, 1 + 1e-6)  # unreachable unless calibrated (float32 sigmoid can hit 1.0)
     for j in range(k):
         p, y = p_val[:, j], y_val[:, j].astype(bool)
-        for t in grid:
-            sel = p >= t
-            if sel.sum() >= min_count and y[sel].mean() >= min_precision:
-                hi[j] = t
-                break
-        for t in grid[::-1]:
-            sel = p <= t
-            if sel.sum() >= min_count and (~y[sel]).mean() >= min_npv:
-                lo[j] = t
-                break
+        order = np.argsort(-p, kind="stable")  # present: take the top-n scores, n as large as possible
+        n = np.arange(1, len(p) + 1)
+        ok = (n >= min_count) & (np.cumsum(y[order]) / n >= min_precision)
+        if ok.any():
+            hi[j] = p[order][np.flatnonzero(ok)[-1]]
+        order = np.argsort(p, kind="stable")  # absent: take the bottom-n scores
+        ok = (n >= min_count) & (np.cumsum(~y[order]) / n >= min_npv)
+        if ok.any():
+            lo[j] = p[order][np.flatnonzero(ok)[-1]]
         lo[j] = min(lo[j], hi[j])
     return lo, hi
 
