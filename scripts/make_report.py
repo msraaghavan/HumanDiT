@@ -42,6 +42,11 @@ def build(runs: Path) -> str:
             lines.append(f"| {label} | {r.get('steps', 1)} | {_fmt(r.get('fid_clean'))} | {_fmt(r.get('fid_legacy_tensorflow'))} | "
                          f"{_fmt(r.get('fd_dinov2'), 1)} | {_fmt(r.get('precision'), 3)} | {_fmt(r.get('recall'), 3)} | {_fmt(sp, 1)} |")
         lines.append("")
+        legacy = ev.get("legacy_dcgan_64px") or {}
+        if legacy.get("fid_clean_64px_vs_ffhq64") is not None:
+            lines += [f"The DCGAN generates 64×64 images, so the 256 px reference also penalises it for resolution. "
+                      f"Scored at its own resolution against all 70k FFHQ faces downsampled to 64×64, its FID "
+                      f"(clean) is **{legacy['fid_clean_64px_vs_ffhq64']:.1f}**.", ""]
         t = ev.get("teacher") or {}
         if t.get("controllability"):
             c = t["controllability"]

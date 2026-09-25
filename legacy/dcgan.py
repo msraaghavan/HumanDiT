@@ -156,6 +156,21 @@ def fid(args: argparse.Namespace) -> None:
             args.out, dataset_name="ffhq", dataset_res=256, dataset_split="trainval70k", mode=mode,
             num_workers=0 if os.name == "nt" else 8, verbose=False), 3)
         print(f"[dcgan] FID ({mode}) = {result[f'fid_{mode}']}", flush=True)
+    # Resolution-matched comparison: the 256 reference penalises a 64 px model for blur alone, so also score
+    # it against all 70k FFHQ faces downsampled to 64x64 (same resizer as training).
+    from PIL import Image
+
+    real64 = Path(args.real64)
+    if len(list(real64.glob("*.png"))) < 70000:
+        real64.mkdir(parents=True, exist_ok=True)
+        k = 0
+        for batch in iter_rows(list_shards(args.data), ["image"], batch_rows=256):
+            for c in batch["image"]:
+                Image.fromarray(decode_image(c, 64)).save(real64 / f"{k:06d}.png")
+                k += 1
+    result["fid_clean_64px_vs_ffhq64"] = round(cfid.compute_fid(
+        args.out, str(real64), mode="clean", num_workers=0 if os.name == "nt" else 8, verbose=False), 3)
+    print(f"[dcgan] FID (clean, 64 px vs FFHQ-64) = {result['fid_clean_64px_vs_ffhq64']}", flush=True)
     Path(args.json).parent.mkdir(parents=True, exist_ok=True)
     Path(args.json).write_text(json.dumps(result, indent=2))
 
@@ -175,6 +190,8 @@ def main() -> None:
         s.add_argument("--out", default="outputs/legacy_samples")
         if name == "fid":
             s.add_argument("--json", default="runs/eval/legacy_dcgan_64px.json")
+            s.add_argument("--data", default="data/ffhq-256")
+            s.add_argument("--real64", default="outputs/ffhq64_real")
     args = ap.parse_args()
     {"train": train, "sample": sample, "fid": fid}[args.cmd](args)
 

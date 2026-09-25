@@ -282,6 +282,27 @@ def pull(a: argparse.Namespace) -> None:
     tmp.unlink()
 
 
+def get(a: argparse.Namespace) -> None:
+    """Fetch one small file (e.g. the latest sample grid) as base64 through the SSH session."""
+    st = _state()
+    remote = a.remote
+    if a.latest:  # newest file matching a glob, e.g. '/workspace/runs/teacher_b/samples/*.png'
+        found = [ln.strip() for ln in run(st, f"ls -t {a.remote} 2>/dev/null | head -1").splitlines()
+                 if ln.strip().startswith("/")]
+        if not found:
+            sys.exit(f"no file matches {a.remote} yet")
+        remote = found[0]
+    out = run(st, f"echo NAME:{remote}; base64 -w 76 '{remote}'", timeout=600)
+    lines = out.splitlines()
+    name = next((ln[5:].strip() for ln in lines if ln.startswith("NAME:")), remote)
+    b64 = "".join(ln.strip() for ln in lines if re.fullmatch(r"[A-Za-z0-9+/=]{1,76}", ln.strip()))
+    if not b64:
+        sys.exit(f"nothing fetched for {name} (missing file? From Git Bash, set MSYS_NO_PATHCONV=1)")
+    dest = Path(a.dest) / Path(name).name if Path(a.dest).is_dir() else Path(a.dest)
+    dest.write_bytes(base64.b64decode(b64))
+    print(f"[pod] {name} -> {dest} ({dest.stat().st_size / 1e3:.0f} kB)")
+
+
 def mark_pulled(_: argparse.Namespace) -> None:
     run(_state(), "touch /workspace/state/pulled")
     print("[pod] marked as pulled; the pod will stop itself after its pipeline finishes")
@@ -324,6 +345,11 @@ def main() -> None:
     pl = sub.add_parser("pull")
     pl.add_argument("--dest", default=".")
     pl.set_defaults(fn=pull)
+    gt = sub.add_parser("get")
+    gt.add_argument("remote", help="remote path, or a glob with --latest")
+    gt.add_argument("--dest", default=".")
+    gt.add_argument("--latest", action="store_true", help="newest file matching the glob")
+    gt.set_defaults(fn=get)
     sub.add_parser("mark-pulled").set_defaults(fn=mark_pulled)
     a = ap.parse_args()
     a.fn(a)
