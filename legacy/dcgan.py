@@ -64,13 +64,13 @@ def weights_init(m: nn.Module) -> None:
 
 
 def load_ffhq64(data: str, limit: int | None) -> torch.Tensor:
+    """uint8 (N,3,64,64): 70k faces take 0.86 GB of RAM (3.4 GB as float32); scaled to [-1,1] per batch."""
     imgs = []
     for batch in iter_rows(list_shards(data), ["image"], batch_rows=256):
         imgs.extend(decode_image(c, 64) for c in batch["image"])
         if limit and len(imgs) >= limit:
             break
-    x = torch.from_numpy(np.stack(imgs[:limit] if limit else imgs)).permute(0, 3, 1, 2).float() / 127.5 - 1
-    return x
+    return torch.from_numpy(np.stack(imgs[:limit] if limit else imgs)).permute(0, 3, 1, 2).contiguous()
 
 
 def train(args: argparse.Namespace) -> None:
@@ -91,7 +91,7 @@ def train(args: argparse.Namespace) -> None:
     while time.perf_counter() - t0 < args.minutes * 60:
         perm = torch.randperm(len(data))
         for i in range(0, len(data) - 63, 64):
-            real = data[perm[i : i + 64]].to(dev)
+            real = data[perm[i : i + 64]].to(dev).float() / 127.5 - 1
             real = torch.where(torch.rand(len(real), 1, 1, 1, device=dev) < 0.5, real, real.flip(-1))
             z = torch.randn(len(real), 100, 1, 1, device=dev)
             fake = g(z)
