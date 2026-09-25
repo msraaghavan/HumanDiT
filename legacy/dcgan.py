@@ -133,6 +133,33 @@ def sample(args: argparse.Namespace) -> None:
                 k += 1
 
 
+def fid(args: argparse.Namespace) -> None:
+    """Same protocol as scripts/evaluate.py: clean-fid vs the FFHQ-256 trainval70k reference, clean + legacy-TF."""
+    import json
+    import os
+    import subprocess
+
+    from cleanfid import fid as cfid
+
+    from humangen.eval.metrics import frechet_distance
+
+    cfid.frechet_distance = frechet_distance  # SciPy 1.18 removed sqrtm(disp=); see scripts/evaluate.py
+    import shutil
+
+    shutil.rmtree(args.out, ignore_errors=True)  # never score stale images from an earlier run
+    sample(args)
+    result = {"tag": "legacy_dcgan_64px", "ckpt": args.ckpt, "n": args.n, "resolution": 64,
+              "note": "64x64 samples; clean-fid resizes them to the Inception input like every other model",
+              "git": subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip()}
+    for mode in ("clean", "legacy_tensorflow"):
+        result[f"fid_{mode}"] = round(cfid.compute_fid(
+            args.out, dataset_name="ffhq", dataset_res=256, dataset_split="trainval70k", mode=mode,
+            num_workers=0 if os.name == "nt" else 8, verbose=False), 3)
+        print(f"[dcgan] FID ({mode}) = {result[f'fid_{mode}']}", flush=True)
+    Path(args.json).parent.mkdir(parents=True, exist_ok=True)
+    Path(args.json).write_text(json.dumps(result, indent=2))
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -141,12 +168,15 @@ def main() -> None:
     t.add_argument("--limit", type=int, default=None)
     t.add_argument("--minutes", type=float, default=40)
     t.add_argument("--out", default="runs/legacy_dcgan")
-    s = sub.add_parser("sample")
-    s.add_argument("--ckpt", default="runs/legacy_dcgan/generator.pt")
-    s.add_argument("--n", type=int, default=5000)
-    s.add_argument("--out", default="outputs/legacy_samples")
+    for name in ("sample", "fid"):
+        s = sub.add_parser(name)
+        s.add_argument("--ckpt", default="runs/legacy_dcgan/generator.pt")
+        s.add_argument("--n", type=int, default=50000 if name == "fid" else 5000)
+        s.add_argument("--out", default="outputs/legacy_samples")
+        if name == "fid":
+            s.add_argument("--json", default="runs/eval/legacy_dcgan_64px.json")
     args = ap.parse_args()
-    train(args) if args.cmd == "train" else sample(args)
+    {"train": train, "sample": sample, "fid": fid}[args.cmd](args)
 
 
 if __name__ == "__main__":

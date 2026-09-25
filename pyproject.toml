@@ -25,7 +25,14 @@ dependencies = [
 
 [project.optional-dependencies]
 eval = ["clean-fid>=0.1.35", "lpips>=0.1.4"]
-demo = ["gradio>=6.28", "invisible-watermark>=0.2", "imageio[ffmpeg]>=2.37", "onnx>=1.20", "onnxruntime>=1.30"]
+demo = [
+    "gradio>=6.28",
+    "invisible-watermark>=0.2",
+    "imageio[ffmpeg]>=2.37",
+    "onnx>=1.20",
+    "onnxruntime>=1.30",
+    "onnxscript>=0.5",
+]
 
 [dependency-groups]
 dev = ["pytest>=9", "ruff>=0.15", "pre-commit>=4"]

@@ -56,6 +56,15 @@ flowchart LR
   [write-up with figures](docs/laptop_smoke_test.md).
 - **Budget-aware training:** the trainer measures its own step time and fits the run to a dollar budget.
   Gradient accumulation backs off automatically on OOM, and every stage of the RunPod pipeline is idempotent and resumable.
+- **Cloud spend guards, learned the hard way:** one Community 4090 passed `nvidia-smi` but could not initialise CUDA.
+  Setup failed, and the pod sat idle for 19 h (about $7), because the pipeline stopped the pod only after a *successful* run.
+  Now every pod must pass a host check before any work starts:
+  - driver-level `cuInit`;
+  - a bf16 GEMM floor, which rejects the 150 W power-capped 4090s common on Community hosts (69–79 vs about 150 TFLOPS);
+  - a verified self-stop path using the pod-scoped API key.
+
+  It also stops itself 20 min after any failed stage, and a deadman timer stops it at the dollar budget whatever
+  state the pipeline is in.
 - **W-Flow adaptation:** the paper computes OT drift in MAE feature spaces. Here the RAEv2 latent *is* a DINOv3
   representation, so the multi-scale drift (tokens, 2×2 and 4×4 pools, global statistics) runs directly on
   generator outputs with no extra feature network. The loss is ported from the official MIT implementation.

@@ -27,7 +27,8 @@ def build(runs: Path) -> str:
     ev = {p.stem: _load(p) for p in sorted((runs / "eval").glob("*.json"))}
     t0 = ev.get("teacher") or {}
     rows = [("teacher", f"Teacher, {t0.get('steps', '?')}-step ODE + Internal Guidance"),
-            ("wflow_1step", "W-Flow student, 1 step"), ("gan_1step", "GAN (adversarial post-training) student, 1 step")]
+            ("wflow_1step", "W-Flow student, 1 step"), ("gan_1step", "GAN (adversarial post-training) student, 1 step"),
+            ("legacy_dcgan_64px", "*Before:* original DCGAN (bugs fixed), 64×64")]
     if any(k in ev for k, _ in rows):
         n = next((ev[k]["n"] for k, _ in rows if k in ev), "?")
         lines += [f"### Generation quality (FFHQ 256×256, {n:,} samples per model)", "",
@@ -38,7 +39,7 @@ def build(runs: Path) -> str:
             if not r:
                 continue
             sp = (r.get("speed") or {}).get("batch16", {}).get("images_per_s")
-            lines.append(f"| {label} | {r['steps']} | {_fmt(r.get('fid_clean'))} | {_fmt(r.get('fid_legacy_tensorflow'))} | "
+            lines.append(f"| {label} | {r.get('steps', 1)} | {_fmt(r.get('fid_clean'))} | {_fmt(r.get('fid_legacy_tensorflow'))} | "
                          f"{_fmt(r.get('fd_dinov2'), 1)} | {_fmt(r.get('precision'), 3)} | {_fmt(r.get('recall'), 3)} | {_fmt(sp, 1)} |")
         lines.append("")
         t = ev.get("teacher") or {}
