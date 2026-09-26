@@ -2,6 +2,12 @@
 
     python scripts/onestep.py wflow --teacher runs/teacher_b/ckpt/ema.safetensors --minutes 60
     python scripts/onestep.py gan   --teacher runs/teacher_b/ckpt/ema.safetensors --minutes 60
+    python scripts/onestep.py gan   --teacher ... --anchor-pairs 8192    # + regression to teacher ODE outputs
+
+Without an anchor, the adversarial student mode-collapsed (one face for every noise; FID 207): a per-sample
+discriminator on re-noised latents cannot see missing diversity. The anchor regresses the student onto teacher ODE
+samples for fixed (noise, attributes) pairs with a pseudo-Huber loss, which pins diversity; the adversarial term
+then sharpens.
 """
 
 from __future__ import annotations
@@ -20,6 +26,7 @@ from safetensors.torch import save_file
 from torchvision.utils import save_image
 
 from humangen.data.latents import LatentDataset, drop_attributes
+from humangen.diffusion.guidance import GuidanceConfig, guided_model_fn
 from humangen.diffusion.transport import Transport, dimension_shift
 from humangen.eval.generate import load_generator
 from humangen.models.layers import AttributeTokens
@@ -81,6 +88,11 @@ def main() -> None:
     ap.add_argument("--sample-every", type=int, default=500)
     ap.add_argument("--decode", action="store_true")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--anchor-pairs", type=int, default=0, help="GAN: teacher ODE pairs to regress onto (0 = off)")
+    ap.add_argument("--anchor-steps", type=int, default=25)
+    ap.add_argument("--anchor-batch", type=int, default=32)
+    ap.add_argument("--anchor-weight", type=float, default=1.0)
+    ap.add_argument("--anchor-c", type=float, default=0.03, help="pseudo-Huber constant (latent units)")
     args = ap.parse_args()
 
     torch.manual_seed(args.seed)
@@ -119,6 +131,24 @@ def main() -> None:
         real_attrs = torch.from_numpy(attrs_np[idx].astype(np.int64))
         fake_attrs = torch.from_numpy(attrs_np[rng.integers(len(ds), size=args.gan_batch)].astype(np.int64))
         return fake_attrs, real, real_attrs
+
+    pairs = None
+    if args.method == "gan" and args.anchor_pairs > 0:  # teacher ODE samples for fixed (noise, attrs), kept on CPU
+        t0 = time.perf_counter()
+        pn, pa, px = [], [], []
+        g = torch.Generator().manual_seed(args.seed + 99)
+        for i in range(0, args.anchor_pairs, 128):
+            b = min(128, args.anchor_pairs - i)
+            noise = torch.randn(b, 1024, 16, 16, generator=g)
+            a = torch.from_numpy(attrs_np[rng.integers(len(ds), size=b)].astype(np.int64))
+            with torch.no_grad(), prec.autocast():
+                x = transport.sample(guided_model_fn(teacher, a.to(dev), GuidanceConfig()), noise.to(dev), args.anchor_steps)
+            pn.append(noise.half())
+            pa.append(a)
+            px.append(x.float().cpu().half())
+        pairs = (torch.cat(pn), torch.cat(pa), torch.cat(px))
+        print(f"[gan] {len(pairs[0])} teacher anchor pairs ({args.anchor_steps} steps) in "
+              f"{time.perf_counter() - t0:.0f} s", flush=True)
 
     pool = ThreadPoolExecutor(1)
     fut = pool.submit(next_batch)
@@ -163,8 +193,18 @@ def main() -> None:
             with prec.autocast():  # G step
                 fake = student(z, t_one(len(z)), fake_attrs)[0].float()
                 lg = g_loss(disc, fake, fake_attrs, transport)
+            loss = lg
+            if pairs is not None:
+                j = torch.from_numpy(rng.integers(len(pairs[0]), size=args.anchor_batch))
+                pz, pa_, px_ = (pairs[0][j].to(dev).float(), pairs[1][j].to(dev), pairs[2][j].to(dev).float())
+                with prec.autocast():
+                    pred = student(pz, t_one(len(pz)), pa_)[0].float()
+                mse = (pred - px_).pow(2).mean(dim=(1, 2, 3))
+                la = (torch.sqrt(mse + args.anchor_c**2) - args.anchor_c).mean()
+                loss = lg + args.anchor_weight * la
+                info["loss_anchor"] = float(la)
             opt_g.zero_grad(set_to_none=True)
-            lg.backward()
+            loss.backward()
             info.update(loss_d=float(ld), loss_g=float(lg))
         gn = torch.nn.utils.clip_grad_norm_(student.parameters(), 1.0)
         opt_g.step()
@@ -194,7 +234,7 @@ def main() -> None:
 
         rae = RAE(load_encoder=False).to(dev)
         save_image(rae.decode(zs), out / "samples" / "final.png", nrow=8, padding=2)
-    (out / "summary.json").write_text(json.dumps({"method": args.method, "steps": step,
+    (out / "summary.json").write_text(json.dumps({"method": args.method, "steps": step, "anchor_pairs": args.anchor_pairs,
                                                   "minutes": round((time.perf_counter() - t_start) / 60, 2),
                                                   "batch": bsz, "teacher": args.teacher}, indent=2))
     print(f"[{args.method}] done: {step} steps -> {out / 'student.safetensors'}", flush=True)

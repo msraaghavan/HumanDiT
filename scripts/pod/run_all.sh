@@ -127,6 +127,12 @@ if [ "${EXTRAS:-0}" = 1 ]; then
   for n in 10 25; do
     stage x_teacher_${n}step $PY scripts/evaluate.py --ckpt "$T" --tag teacher_${n}step_10k $XEV --steps $n
   done
+  # GAN student, second attempt: the first collapsed to one face; add the regression anchor to teacher ODE pairs.
+  if [ "$DRY" = 1 ]; then NP=8; else NP=6144; fi
+  stage x_gan_anchor $PY scripts/onestep.py gan --teacher "$T" --cache "$CACHE/ffhq256" --out "$RUNS/student_gan_anchor" \
+    $STUDENT_ARGS --anchor-pairs $NP
+  stage x_eval_gan_anchor $PY scripts/evaluate.py --ckpt "$RUNS/student_gan_anchor/student.safetensors" --kind student \
+    --tag gan_anchor_1step $EV $EVAL_ARGS --steps 1
   BEST=$(uv run --no-sync python - "$RUNS/eval_extra" <<'PY'
 import json, sys
 from pathlib import Path
