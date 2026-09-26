@@ -2,8 +2,14 @@
 
 ![Python 3.14](https://img.shields.io/badge/python-3.14-blue) ![PyTorch 2.14](https://img.shields.io/badge/pytorch-2.14-ee4c2c) ![Tests](https://img.shields.io/badge/tests-pytest-green) ![License](https://img.shields.io/badge/code-MIT-lightgrey)
 
-A 256×256 face generator you can steer with attributes (smile, glasses, beard, hair, age, …). It is built from
-the newest published methods at every stage, and every result below is measured by scripts in this repo.
+A 256×256 face generator you can steer with 12 attributes (smile, glasses, hat, beard, grey or blond hair, …). It
+is built from the newest published methods at every stage, and every result below is measured by scripts in this
+repo.
+
+![HumanDiT teacher samples](docs/assets/teacher_final_grid.jpg)
+*Fixed seeds, not cherry-picked: 50-step teacher with Internal Guidance, final EMA weights. Top row: unconditional.
+Bottom row: one attribute requested per face (male, eyeglasses, hat, goatee, sideburns, beard, lipstick, grey hair),
+with attribute CFG 2.0. Every image is synthetic.*
 
 | Stage | What | Why it matters |
 |---|---|---|

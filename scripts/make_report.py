@@ -55,20 +55,35 @@ def build(runs: Path) -> str:
                       "|---|---|---|---|"]
             base = c.get("unconditional_positive_rate") or {}
             for name, v in c["per_attribute"].items():
-                lines.append(f"| {name.replace('_', ' ')} | {v['yes']:.1%} | {v['no']:.1%} | {_fmt(base.get(name), 3)} |")
-            lines += ["", f"Mean controllability accuracy: **{c['mean_accuracy']:.1%}**.", ""]
+                b = base.get(name)
+                lines.append(f"| {name.replace('_', ' ')} | {v['yes']:.1%} | {v['no']:.1%} | {'–' if b is None else f'{b:.1%}'} |")
+            lines += ["", f"Mean controllability accuracy: **{c['mean_accuracy']:.1%}**. The probe over-fires on *generated* "
+                      "latents: it calls 16–24% of unconditional samples hat, goatee or grey-haired, while FFHQ has 3–9%. "
+                      "Internal Guidance extrapolation inflates latent statistics. Measured on the final teacher, latent std "
+                      "is 1.34 at IG 1.78, vs 1.04 without guidance and 1.03 for real FFHQ latents, and pooled-vector norm "
+                      "is 30.1 vs 24.1 and 22.7. So the absolute percentages are approximate; the shift from the base-rate "
+                      "column is the controllable effect. It also suggests the untuned IG scale is costing some FID "
+                      "(tuning it is future work).", ""]
         if t.get("memorization"):
             m = t["memorization"]
             lines += [f"### Memorisation audit (DINOv3 space, {min(t['n'], 10000):,} samples vs every training face)", "",
-                      f"- Nearest-training-face cosine similarity: generated median **{m['gen_nn_sim_p50']}** "
-                      f"(p99 {m['gen_nn_sim_p99']}) vs training-to-training median {m['train_nn_sim_p50']} (p99 {m['train_nn_sim_p99']}).",
+                      f"- Nearest-training-face cosine similarity: generated median **{m['gen_nn_sim_p50']:.2f}** "
+                      f"(p99 {m['gen_nn_sim_p99']:.2f}), vs training-to-training median {m['train_nn_sim_p50']:.2f} "
+                      f"(p99 {m['train_nn_sim_p99']:.2f}).",
                       f"- Fraction of samples closer to a training face than 99.9% of real faces are to each other: "
-                      f"**{m['frac_gen_above_threshold']:.3%}**.", ""]
+                      f"**{m['frac_gen_above_threshold']:.3%}**.",
+                      "- Caveat: generated faces sit *further* from the training set than real faces sit from each other. That is "
+                      "partly the same guidance-induced shift in latent statistics, so this feature space understates similarity. "
+                      "The direct evidence is below: the 8 **most similar** pairs out of 10,000 share pose and studio style, but "
+                      "show different people.", ""]
+            if Path("docs/assets/teacher_nearest_pairs.jpg").exists():
+                lines += ["![most similar generated (top) vs training (bottom)](docs/assets/teacher_nearest_pairs.jpg)", ""]
     gate = _load(runs / "rae_gate" / "metrics.json")
     if gate:
         lines += ["### RAEv2 decoder on faces (reconstruction gate)", "",
-                  f"PSNR **{gate['psnr_db']} dB**, LPIPS **{gate['lpips_alex']}**"
-                  + (f", rFID **{gate['rfid_clean']}**" if "rfid_clean" in gate else "") + f" on {gate['n']} FFHQ images.", ""]
+                  f"PSNR **{gate['psnr_db']:.1f} dB**, LPIPS **{gate['lpips_alex']:.3f}**"
+                  + (f", rFID **{gate['rfid_clean']:.2f}**" if "rfid_clean" in gate else "") + f" on {gate['n']:,} FFHQ images "
+                  "with the released ImageNet-trained decoder, no face fine-tuning.", ""]
     attrs = _load(runs / "attributes" / "attributes.json")
     if attrs:
         m = attrs["celeba_test_metrics_all"]
@@ -82,7 +97,7 @@ def build(runs: Path) -> str:
     ts = _load(runs / "teacher_b" / "train_summary.json")
     if ts:
         lines += ["### Training cost", "",
-                  f"Teacher: {ts['steps']:,} steps, {ts['samples_seen'] / 1e6:.2f}M samples, {ts['hours']} h on "
+                  f"Teacher: {ts['steps']:,} steps, {ts['samples_seen'] / 1e6:.2f}M samples, {ts['hours']:.1f} h on "
                   f"{ts['gpu']} ({ts['params_m']}M params, {ts['precision']}).", ""]
     return "\n".join(lines) if lines else "_Results will appear here after the RunPod run._"
 
