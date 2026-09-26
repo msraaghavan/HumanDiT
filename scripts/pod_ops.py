@@ -259,10 +259,11 @@ def pull(a: argparse.Namespace) -> None:
     st = _state()
     token = secrets.token_hex(16)  # unguessable file name while the temporary server is up
     ok = f"SERVING_{secrets.token_hex(4)}"
+    paths = a.paths or ("runs/eval/*.json runs/eval/*.png runs/rae_gate/metrics.json runs/rae_gate/recon_grid.png "
+                        "runs/attributes runs/*/ckpt/ema.safetensors runs/*/student.safetensors runs/*/samples/*.png "
+                        "runs/*/metrics.jsonl runs/*/train_summary.json runs/*/summary.json logs")
     run(st, (f"mkdir -p /workspace/share && cd /workspace && tar czf /workspace/share/{token}.tgz "
-             "--ignore-failed-read runs/eval/*.json runs/eval/*.png runs/rae_gate/metrics.json "
-             "runs/rae_gate/recon_grid.png runs/attributes runs/*/ckpt/ema.safetensors runs/*/student.safetensors "
-             "runs/*/samples/*.png runs/*/metrics.jsonl runs/*/train_summary.json runs/*/summary.json logs "
+             f"--ignore-failed-read {paths} "
              f"2>/dev/null; cd /workspace/share && (setsid nohup python3 -m http.server 8000 >/dev/null 2>&1 &) ; "
              f"sleep 2; echo {ok}"), timeout=1800)
     url = f"https://{st['id']}-8000.proxy.runpod.net/{token}.tgz"
@@ -344,6 +345,7 @@ def main() -> None:
     lg.set_defaults(fn=logs)
     pl = sub.add_parser("pull")
     pl.add_argument("--dest", default=".")
+    pl.add_argument("--paths", default=None, help="space-separated globs under /workspace (default: all results)")
     pl.set_defaults(fn=pull)
     gt = sub.add_parser("get")
     gt.add_argument("remote", help="remote path, or a glob with --latest")
