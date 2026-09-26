@@ -115,9 +115,10 @@ GTX 1650 Ti laptop. It uses the teacher, the 1-step W-Flow student and the probe
 CPU-only machines. The screenshots below are taken by [`scripts/demo_screenshots.py`](scripts/demo_screenshots.py),
 driving the real app in Edge.
 
-**Generate:** 8 one-step faces for *female + eyeglasses + blond + smiling*. Timings are on the laptop: the generator
-takes 28 ms/face, the RAEv2 decoder 200 ms/face and the TrustMark watermark 378 ms/face on the CPU. The probe's
-confidence for every attribute of every face is listed underneath.
+**Generate:** 8 one-step faces for *female + eyeglasses + blond + smiling*. Timings are on the laptop (CUDA-synchronised,
+warm): the generator takes 77 ms/face, the RAEv2 decoder 155 ms/face and the TrustMark watermark 386 ms/face on the
+CPU, so the watermark, not the model, is the laptop bottleneck. The probe's confidence for every attribute of every
+face is listed underneath.
 
 ![demo: generate](docs/assets/demo_generate.jpg)
 
@@ -179,7 +180,8 @@ Everything below happened during this project's single cloud run. Each fix is in
 | **FID crashed on the pod** | Python 3.14 made `forkserver` the Linux default, so clean-fid's DataLoader can't pickle its resize closure. It passed on Windows only because Windows uses 0 workers. | One `cleanfid()` helper: fork workers on Linux, plus the SciPy 1.18 `sqrtm` patch (which was also missing from one call site). |
 | **Grey samples at 1M training samples** | The EMA half-life of 1.4M samples has no warm-up, so 61% of the EMA was still the zero-initialised output layer. | Checked the raw weights instead: they already made faces after 40 min. Documented, not "fixed", so results come from the exact code that ran. |
 | **W-Flow OOM at batch 128** | In eager mode, the teacher, EMA and AdamW states plus activations exceeded 24 GB. | Activation checkpointing for the student and the discriminator trunk: peak 10.9 GiB (W-Flow) and 7.6 GiB (GAN). |
-| **The GAN student collapsed to one face** | FID 207, recall 0. The discriminator sat at chance, since a per-sample D on re-noised latents cannot see missing diversity. | Second attempt with a pseudo-Huber anchor to 6,144 teacher ODE pairs (results below). |
+| **The GAN student collapsed to one face** | FID 207, recall 0. The discriminator sat at chance, since a per-sample D on re-noised latents cannot see missing diversity. | Second attempt: a pseudo-Huber anchor to 6,144 teacher ODE pairs (`onestep.py gan --anchor-pairs`). Its run was queued on the pod, but its results are among the unrecovered ones (next row). |
+| **The last results are stranded on a stopped pod** | The budget deadman stopped the pod at the spending cap, as designed, before the ablation stage's results were pulled. My laptop-side watcher had matched its own echoed command, so it never triggered the pull. A Community pod's disk lives on its host, and that GPU was re-rented, so the pod cannot restart to read it. | **Not fixed; results lost** unless that host frees up. Only the W-Flow step sweep was read before the stop. Lesson: pull after every stage, or use a network volume that isn't tied to one host. |
 | **The watermark didn't work** | `invisible-watermark` DWT-DCT recovered 0 of 6 marks on 256 px faces and changed pixels by up to 179 levels. | Replaced it with TrustMark: 100% recovery after PNG, JPEG q75, rescaling and cropping, 43 dB PSNR, and 0 false positives (`scripts/watermark_eval.py`). |
 
 | EMA, 1.0M samples | raw weights, 0.72M samples |
@@ -216,7 +218,7 @@ uv run --extra demo python app/gradio_app.py            # live demo
 | Quality (FID-50k vs FFHQ-256, clean) | **177.6** (45.8 at its own 64 px) | **4.60** (teacher) · 23.0 (1-step student) |
 | Control | none | 12 face attributes, any subset (84% probe agreement) |
 | Sampling | 1 step (GAN) | 50-step teacher **and** a 1-step student, 20× faster |
-| Evaluation | none | FID, FD_DINOv2, precision/recall, controllability, memorisation, ablations |
+| Evaluation | none | FID, FD_DINOv2, precision/recall, controllability, memorisation, student step ablation |
 | Safety | none | measured watermark, memorisation audit, model card |
 | Engineering | one script, duplicated folder, CPU-only torch | package, tests, CI, spend-guarded resumable cloud pipeline, ONNX export |
 
@@ -230,12 +232,15 @@ its "latent consistency" loss penalised output differences between nearby latent
 - Results are not SOTA: the best published FFHQ-256 FIDs are about 2–3, from far larger compute budgets. The teacher
   trained for 10.8 h on one RTX 4090 (12M samples).
 - The one-step student is 20× faster but much worse (FID 23.0 vs 4.60, recall 0.16 vs 0.68): 45 min of W-Flow
-  distillation trades diversity for speed. It is a pure one-step model (more steps make it worse; see the ablation).
+  distillation trades diversity for speed. It is a pure one-step model: more steps make it worse (FID-10k 23.8 → 28.5
+  → 34.8 at 1 → 2 → 4 steps; read from the pod's eval JSONs before it stopped, so the JSONs are not in `runs/`).
   W-Flow here is my adaptation (drift in the RAEv2 latent itself, teacher initialisation), not the paper's exact setup.
 - The first GAN student failed (mode collapse). It is reported, not hidden.
 - Internal Guidance at the default scale 1.78 inflates latent statistics by about a third. That inflates the probe's
-  attribute rates and lowers the memorisation-audit similarities (both explained next to those numbers). The guidance
-  sweep shows how much FID it costs.
+  attribute rates and lowers the memorisation-audit similarities (both explained next to those numbers).
+- Not recovered: the guidance-scale sweep (IG 1.0–1.78), the teacher 10/25-step sweep and the anchored-GAN retry.
+  They are scripted (`EXTRAS=1 bash scripts/pod/run_all.sh`, dry-run tested), but their results never left the pod
+  (see "What broke"). So how much FID the default guidance scale costs is unmeasured.
 
 ## Licences
 

@@ -106,5 +106,5 @@ def grouped_wflow_loss(
         loss, inf = wflow_loss(g, p, **kw)
         total = total + loss
         info.update({f"{name}/{k}": v for k, v in inf.items()})
-        info[f"{name}/loss"] = float(loss)
+        info[f"{name}/loss"] = float(loss.detach())
     return total, info

@@ -166,10 +166,11 @@ def build_ui(e: Engine) -> gr.Blocks:
             def generate(mode_, seed_, count_, steps_, cfg_, ig_, *choices):
                 n = int(count_)
                 noise, a = e.noise(seed_, n), e.attrs(list(choices), n)
-                if e.dev.type == "cuda":
-                    torch.cuda.synchronize()
+                sync = torch.cuda.synchronize if e.dev.type == "cuda" else (lambda: None)
+                sync()
                 t0 = time.perf_counter()
                 z, _ = e.sample(noise, a, mode_, steps_, cfg_, ig_)
+                sync()  # CUDA kernels are asynchronous; without this the decoder is billed for the generator
                 t1 = time.perf_counter()
                 imgs = e.decode(z, mark=False)
                 t2 = time.perf_counter()

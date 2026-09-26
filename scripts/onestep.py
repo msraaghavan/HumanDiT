@@ -202,7 +202,7 @@ def main() -> None:
             loss, info = grouped_wflow_loss(gen.float(), real, args.groups)
             opt_g.zero_grad(set_to_none=True)
             loss.backward()
-            info["loss"] = float(loss)
+            info["loss"] = float(loss.detach())
         else:
             real_attrs = drop_attributes(real_attrs.to(dev), 0.1, 0.3)
             fake_attrs = drop_attributes(cond, 0.1, 0.3)
@@ -228,10 +228,10 @@ def main() -> None:
                 mse = (pred - px_).pow(2).mean(dim=(1, 2, 3))
                 la = (torch.sqrt(mse + args.anchor_c**2) - args.anchor_c).mean()
                 loss = lg + args.anchor_weight * la
-                info["loss_anchor"] = float(la)
+                info["loss_anchor"] = float(la.detach())
             opt_g.zero_grad(set_to_none=True)
             loss.backward()
-            info.update(loss_d=float(ld), loss_g=float(lg))
+            info.update(loss_d=float(ld.detach()), loss_g=float(lg.detach()))
         gn = torch.nn.utils.clip_grad_norm_(student.parameters(), 1.0)
         opt_g.step()
         update_ema(ema, student, beta)

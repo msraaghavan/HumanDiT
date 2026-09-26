@@ -78,12 +78,12 @@ def d_loss(
     xf, tf = renoise(fake.detach(), transport)
     lr_, lf = d(xr, tr, real_attrs), d(xf, tf, fake_attrs)
     loss = F.softplus(-lr_).mean() + F.softplus(lf).mean()
-    info = {"d_real": float(lr_.mean()), "d_fake": float(lf.mean())}
+    info = {"d_real": float(lr_.detach().mean()), "d_fake": float(lf.detach().mean())}
     if r1_weight > 0:  # approximated R1: || D(x) - D(x + sigma*eps) ||^2 on real inputs
         pert = d(xr + r1_sigma * torch.randn_like(xr), tr, real_attrs)
         r1 = (pert - lr_).pow(2).mean()
         loss = loss + r1_weight * r1
-        info["r1"] = float(r1)
+        info["r1"] = float(r1.detach())
     return loss, info
 
 
