@@ -59,7 +59,9 @@ class GroupSampler:
                 j, state, pool = self.options[self.rng.integers(len(self.options))]
                 a[j] = state
             cond.append(np.repeat(a[None], n_gen, 0))
-            pos_idx.append(self.rng.integers(self.n, size=n_pos) if pool is None else self.rng.choice(pool, n_pos))
+            pos_idx.append(
+                self.rng.integers(self.n, size=n_pos) if pool is None else self.rng.choice(pool, n_pos)
+            )
         return torch.from_numpy(np.concatenate(cond)), np.concatenate(pos_idx)
 
 
@@ -88,7 +90,9 @@ def main() -> None:
     ap.add_argument("--sample-every", type=int, default=500)
     ap.add_argument("--decode", action="store_true")
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--anchor-pairs", type=int, default=0, help="GAN: teacher ODE pairs to regress onto (0 = off)")
+    ap.add_argument(
+        "--anchor-pairs", type=int, default=0, help="GAN: teacher ODE pairs to regress onto (0 = off)"
+    )
     ap.add_argument("--anchor-steps", type=int, default=25)
     ap.add_argument("--anchor-batch", type=int, default=32)
     ap.add_argument("--anchor-weight", type=float, default=1.0)
@@ -110,12 +114,15 @@ def main() -> None:
     ds = LatentDataset(args.cache, args.limit)
     attrs_np = ds.attrs if ds.attrs.shape[1] else np.zeros((len(ds), k), dtype=np.int8)
     transport = Transport(shift=dimension_shift(1024 * 16 * 16))
-    opt_g = torch.optim.AdamW(student.parameters(), lr=args.lr, betas=(0.0 if args.method == "gan" else 0.9, 0.99),
-                              weight_decay=0.0)
+    opt_g = torch.optim.AdamW(
+        student.parameters(), lr=args.lr, betas=(0.0 if args.method == "gan" else 0.9, 0.99), weight_decay=0.0
+    )
     disc = opt_d = None
     if args.method == "gan":
         disc = TrunkDiscriminator(teacher).to(dev)
-        opt_d = torch.optim.AdamW(disc.trainable_parameters(), lr=args.d_lr, betas=(0.0, 0.99), weight_decay=0.0)
+        opt_d = torch.optim.AdamW(
+            disc.trainable_parameters(), lr=args.d_lr, betas=(0.0, 0.99), weight_decay=0.0
+        )
     groups = GroupSampler(attrs_np, seed=args.seed)
     rng = np.random.default_rng(args.seed + 1)
     bsz = args.groups * args.gen_per_group if args.method == "wflow" else args.gan_batch
@@ -133,7 +140,9 @@ def main() -> None:
         return fake_attrs, real, real_attrs
 
     pairs = None
-    if args.method == "gan" and args.anchor_pairs > 0:  # teacher ODE samples for fixed (noise, attrs), kept on CPU
+    if (
+        args.method == "gan" and args.anchor_pairs > 0
+    ):  # teacher ODE samples for fixed (noise, attrs), kept on CPU
         t0 = time.perf_counter()
         pn, pa, px = [], [], []
         g = torch.Generator().manual_seed(args.seed + 99)
@@ -142,13 +151,18 @@ def main() -> None:
             noise = torch.randn(b, 1024, 16, 16, generator=g)
             a = torch.from_numpy(attrs_np[rng.integers(len(ds), size=b)].astype(np.int64))
             with torch.no_grad(), prec.autocast():
-                x = transport.sample(guided_model_fn(teacher, a.to(dev), GuidanceConfig()), noise.to(dev), args.anchor_steps)
+                x = transport.sample(
+                    guided_model_fn(teacher, a.to(dev), GuidanceConfig()), noise.to(dev), args.anchor_steps
+                )
             pn.append(noise.half())
             pa.append(a)
             px.append(x.float().cpu().half())
         pairs = (torch.cat(pn), torch.cat(pa), torch.cat(px))
-        print(f"[gan] {len(pairs[0])} teacher anchor pairs ({args.anchor_steps} steps) in "
-              f"{time.perf_counter() - t0:.0f} s", flush=True)
+        print(
+            f"[gan] {len(pairs[0])} teacher anchor pairs ({args.anchor_steps} steps) in "
+            f"{time.perf_counter() - t0:.0f} s",
+            flush=True,
+        )
 
     pool = ThreadPoolExecutor(1)
     fut = pool.submit(next_batch)
@@ -158,13 +172,23 @@ def main() -> None:
         fixed_attrs[j, (j - 8) % k] = AttributeTokens.YES
     log = open(out / "metrics.jsonl", "a")  # noqa: SIM115
     t_start, step = time.perf_counter(), 0
-    print(f"[{args.method}] student from {args.teacher} (step {meta.get('step')}), batch {bsz}, "
-          f"{len(groups.options)} attribute groups, budget {args.minutes} min", flush=True)
+    print(
+        f"[{args.method}] student from {args.teacher} (step {meta.get('step')}), batch {bsz}, "
+        f"{len(groups.options)} attribute groups, budget {args.minutes} min",
+        flush=True,
+    )
 
     def save():
-        md = {"model_config": meta["model_config"], "attr_names": json.dumps(attr_names), "kind": args.method,
-              "step": str(step), "teacher": str(args.teacher)}
-        save_file({kk: v.contiguous() for kk, v in ema.state_dict().items()}, str(out / "student.safetensors"), md)
+        md = {
+            "model_config": meta["model_config"],
+            "attr_names": json.dumps(attr_names),
+            "kind": args.method,
+            "step": str(step),
+            "teacher": str(args.teacher),
+        }
+        save_file(
+            {kk: v.contiguous() for kk, v in ema.state_dict().items()}, str(out / "student.safetensors"), md
+        )
 
     while step < args.max_steps and time.perf_counter() - t_start < args.minutes * 60:
         cond, real, real_attrs = fut.result()
@@ -186,7 +210,9 @@ def main() -> None:
             with prec.autocast():  # D step
                 with torch.no_grad():
                     fake = student(z, t_one(len(z)), fake_attrs)[0].float()
-                ld, info = d_loss(disc, real, real_attrs, fake, fake_attrs, transport, args.r1_weight, args.r1_sigma)
+                ld, info = d_loss(
+                    disc, real, real_attrs, fake, fake_attrs, transport, args.r1_weight, args.r1_sigma
+                )
             opt_d.zero_grad(set_to_none=True)
             ld.backward()
             opt_d.step()
@@ -211,13 +237,20 @@ def main() -> None:
         update_ema(ema, student, beta)
         step += 1
         if step % 25 == 0 or step == 1:
-            rec = {"step": step, "minutes": round((time.perf_counter() - t_start) / 60, 2), "grad_norm": float(gn), **info}
+            rec = {
+                "step": step,
+                "minutes": round((time.perf_counter() - t_start) / 60, 2),
+                "grad_norm": float(gn),
+                **info,
+            }
             log.write(json.dumps(rec) + "\n")
             log.flush()
             main_loss = info.get("loss", info.get("loss_g"))
             mem = f" peak {torch.cuda.max_memory_allocated() / 2**30:.1f} GiB" if dev.type == "cuda" else ""
-            print(f"[{args.method}] step {step} {rec['minutes']} min loss {main_loss:.4f} gnorm {float(gn):.2f}{mem}",
-                  flush=True)
+            print(
+                f"[{args.method}] step {step} {rec['minutes']} min loss {main_loss:.4f} gnorm {float(gn):.2f}{mem}",
+                flush=True,
+            )
             if not math.isfinite(main_loss):
                 raise FloatingPointError("non-finite loss")
         if step % args.sample_every == 0:
@@ -234,9 +267,19 @@ def main() -> None:
 
         rae = RAE(load_encoder=False).to(dev)
         save_image(rae.decode(zs), out / "samples" / "final.png", nrow=8, padding=2)
-    (out / "summary.json").write_text(json.dumps({"method": args.method, "steps": step, "anchor_pairs": args.anchor_pairs,
-                                                  "minutes": round((time.perf_counter() - t_start) / 60, 2),
-                                                  "batch": bsz, "teacher": args.teacher}, indent=2))
+    (out / "summary.json").write_text(
+        json.dumps(
+            {
+                "method": args.method,
+                "steps": step,
+                "anchor_pairs": args.anchor_pairs,
+                "minutes": round((time.perf_counter() - t_start) / 60, 2),
+                "batch": bsz,
+                "teacher": args.teacher,
+            },
+            indent=2,
+        )
+    )
     print(f"[{args.method}] done: {step} steps -> {out / 'student.safetensors'}", flush=True)
 
 

@@ -31,7 +31,9 @@ def stats(feats: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
 
 
 @torch.no_grad()
-def knn_precision_recall(real: torch.Tensor, fake: torch.Tensor, k: int = 3, chunk: int = 2048) -> dict[str, float]:
+def knn_precision_recall(
+    real: torch.Tensor, fake: torch.Tensor, k: int = 3, chunk: int = 2048
+) -> dict[str, float]:
     """Improved precision/recall: a sample is covered if it lies inside some k-NN ball of the other set."""
 
     def radii(x: torch.Tensor) -> torch.Tensor:
@@ -58,14 +60,18 @@ class DINOv2Features(torch.nn.Module):
 
     def __init__(self):
         super().__init__()
-        self.model = torch.hub.load("facebookresearch/dinov2", "dinov2_vitl14", trust_repo=True, skip_validation=True)
+        self.model = torch.hub.load(
+            "facebookresearch/dinov2", "dinov2_vitl14", trust_repo=True, skip_validation=True
+        )
         self.model.eval().requires_grad_(False)
         self.register_buffer("mean", torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1))
         self.register_buffer("std", torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1))
 
     @torch.no_grad()
     def forward(self, images01: torch.Tensor) -> torch.Tensor:
-        x = F.interpolate(images01.float(), size=(224, 224), mode="bicubic", antialias=True, align_corners=False)
+        x = F.interpolate(
+            images01.float(), size=(224, 224), mode="bicubic", antialias=True, align_corners=False
+        )
         return self.model((x.clamp(0, 1) - self.mean) / self.std)
 
 

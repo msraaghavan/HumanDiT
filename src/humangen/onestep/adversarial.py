@@ -31,7 +31,8 @@ class TrunkDiscriminator(nn.Module):
         self.layers = layers
         d = self.cfg.trunk_dim
         self.heads = nn.ModuleList(
-            nn.Sequential(nn.LayerNorm(d), nn.Linear(d, hidden), nn.SiLU(), nn.Linear(hidden, 1)) for _ in layers
+            nn.Sequential(nn.LayerNorm(d), nn.Linear(d, hidden), nn.SiLU(), nn.Linear(hidden, 1))
+            for _ in layers
         )
 
     def trainable_parameters(self):
@@ -63,8 +64,16 @@ def renoise(x: torch.Tensor, transport: Transport, t_max: float = 0.7) -> tuple[
     return transport.interpolate(x, torch.randn_like(x), t), t
 
 
-def d_loss(d: TrunkDiscriminator, real: torch.Tensor, real_attrs, fake: torch.Tensor, fake_attrs, transport: Transport,
-           r1_weight: float, r1_sigma: float) -> tuple[torch.Tensor, dict]:
+def d_loss(
+    d: TrunkDiscriminator,
+    real: torch.Tensor,
+    real_attrs,
+    fake: torch.Tensor,
+    fake_attrs,
+    transport: Transport,
+    r1_weight: float,
+    r1_sigma: float,
+) -> tuple[torch.Tensor, dict]:
     xr, tr = renoise(real, transport)
     xf, tf = renoise(fake.detach(), transport)
     lr_, lf = d(xr, tr, real_attrs), d(xf, tf, fake_attrs)

@@ -51,9 +51,19 @@ class LatentDecoder(nn.Module):
 
 def export(module: nn.Module, args: tuple, names: list[str], path: Path) -> None:
     batch = torch.export.Dim("batch", min=1, max=64)
-    shapes = tuple({0: batch} for _ in names)  # positional: forward() arg names differ from the ONNX input names
-    prog = torch.onnx.export(module, args, dynamo=True, input_names=names, output_names=["out"],
-                             dynamic_shapes=shapes, optimize=True, verbose=False)
+    shapes = tuple(
+        {0: batch} for _ in names
+    )  # positional: forward() arg names differ from the ONNX input names
+    prog = torch.onnx.export(
+        module,
+        args,
+        dynamo=True,
+        input_names=names,
+        output_names=["out"],
+        dynamic_shapes=shapes,
+        optimize=True,
+        verbose=False,
+    )
     n_bytes = sum(t.numel() * t.element_size() for t in [*module.parameters(), *module.buffers()])
     prog.save(str(path), external_data=n_bytes > 1.8e9)  # protobuf's 2 GB limit (the decoder is ~1.7 GB)
 
@@ -90,7 +100,9 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--student", required=True, help="one-step student (or any generator) safetensors")
     ap.add_argument("--out", default="onnx")
-    ap.add_argument("--int8", action="store_true", help="also write a weight-only int8 decoder (3.5x smaller)")
+    ap.add_argument(
+        "--int8", action="store_true", help="also write a weight-only int8 decoder (3.5x smaller)"
+    )
     ap.add_argument("--threads", type=int, default=0, help="ORT intra-op threads (0 = all cores)")
     ap.add_argument("--reps", type=int, default=5)
     a = ap.parse_args()
@@ -111,8 +123,10 @@ def main() -> None:
     with torch.no_grad():
         z_ref = gen(noise, attrs)
         img_ref = dec(z_ref)
-    for name, module, args, names in (("generator_1step", gen, (noise, attrs), ["noise", "attrs"]),
-                                      ("decoder", dec, (z_ref,), ["latent"])):
+    for name, module, args, names in (
+        ("generator_1step", gen, (noise, attrs), ["noise", "attrs"]),
+        ("decoder", dec, (z_ref,), ["latent"]),
+    ):
         path = out / f"{name}.onnx"
         t0 = time.time()
         with torch.no_grad():
@@ -123,7 +137,10 @@ def main() -> None:
     import onnxruntime as ort
 
     report["onnxruntime"] = ort.__version__
-    g_sess, d_sess = ort_session(out / "generator_1step.onnx", a.threads), ort_session(out / "decoder.onnx", a.threads)
+    g_sess, d_sess = (
+        ort_session(out / "generator_1step.onnx", a.threads),
+        ort_session(out / "decoder.onnx", a.threads),
+    )
     feeds = {"noise": noise.numpy(), "attrs": attrs.numpy()}
     z_ort = g_sess.run(None, feeds)[0]
     img_ort = d_sess.run(None, {"latent": z_ref.numpy()})[0]
@@ -134,7 +151,9 @@ def main() -> None:
     one = {"noise": feeds["noise"][:1], "attrs": feeds["attrs"][:1]}
     z1 = z_ref.numpy()[:1]
     report["generator_1step"]["cpu_ms_per_face"] = round(latency_ms(lambda: g_sess.run(None, one), a.reps), 1)
-    report["decoder"]["cpu_ms_per_face"] = round(latency_ms(lambda: d_sess.run(None, {"latent": z1}), a.reps), 1)
+    report["decoder"]["cpu_ms_per_face"] = round(
+        latency_ms(lambda: d_sess.run(None, {"latent": z1}), a.reps), 1
+    )
     with torch.no_grad():
         report["torch_cpu_ms_per_face"] = {
             "generator_1step": round(latency_ms(lambda: gen(noise[:1], attrs[:1]), a.reps), 1),
@@ -144,12 +163,14 @@ def main() -> None:
     if a.int8:
         # Weight-only, block-wise int8 (MatMulNBits). Dynamic int8 also quantises activations per tensor, and the
         # ViT-XL decoder's activation outliers wreck it (measured 9-11 dB PSNR vs fp32); int4 blocks give 24.6 dB.
-        import onnx
         from onnxruntime.quantization.matmul_nbits_quantizer import MatMulNBitsQuantizer
 
+        import onnx
+
         q_path = out / "decoder_int8.onnx"
-        qz = MatMulNBitsQuantizer(onnx.load(str(out / "decoder.onnx")), bits=8, block_size=32, is_symmetric=True,
-                                  accuracy_level=4)
+        qz = MatMulNBitsQuantizer(
+            onnx.load(str(out / "decoder.onnx")), bits=8, block_size=32, is_symmetric=True, accuracy_level=4
+        )
         qz.process()
         onnx.save_model(qz.model.model, str(q_path), save_as_external_data=False)
         q_sess = ort_session(q_path, a.threads)

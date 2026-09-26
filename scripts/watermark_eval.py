@@ -33,8 +33,12 @@ ATTACKS = {
     "png": lambda im: _roundtrip(im, "PNG"),
     "jpeg_q75": lambda im: _roundtrip(im, "JPEG", quality=75),
     "jpeg_q50": lambda im: _roundtrip(im, "JPEG", quality=50),
-    "downscale_2x_upscale": lambda im: im.resize((im.width // 2, im.height // 2), Image.BICUBIC).resize(im.size),
-    "center_crop_90pct": lambda im: im.crop((im.width // 20, im.height // 20, im.width * 19 // 20, im.height * 19 // 20)),
+    "downscale_2x_upscale": lambda im: im.resize((im.width // 2, im.height // 2), Image.BICUBIC).resize(
+        im.size
+    ),
+    "center_crop_90pct": lambda im: im.crop(
+        (im.width // 20, im.height // 20, im.width * 19 // 20, im.height * 19 // 20)
+    ),
 }
 
 
@@ -52,7 +56,9 @@ def grid_tiles(path: str, n: int, tile: int = 256, pad: int = 2) -> list[Image.I
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--grid", default="runs/eval/teacher_grid.png", help="grid of generated faces (evaluate.py)")
+    ap.add_argument(
+        "--grid", default="runs/eval/teacher_grid.png", help="grid of generated faces (evaluate.py)"
+    )
     ap.add_argument("--data", default="data/ffhq-256", help="real faces for the false-positive check")
     ap.add_argument("--n", type=int, default=64)
     ap.add_argument("--out", default="runs/eval/watermark.json")

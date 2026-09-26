@@ -36,7 +36,9 @@ def teacher_sampler(
     return sample
 
 
-def one_step_sampler(model: HumanDiTDH, steps: int = 1) -> Callable[[torch.Tensor, torch.Tensor], torch.Tensor]:
+def one_step_sampler(
+    model: HumanDiTDH, steps: int = 1
+) -> Callable[[torch.Tensor, torch.Tensor], torch.Tensor]:
     """Students predict x̂ from noise at t=1; for steps > 1, re-noise to the next t and predict again."""
     transport = Transport(shift=dimension_shift(1024 * 16 * 16))
 

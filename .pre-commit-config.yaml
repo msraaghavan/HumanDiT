@@ -1,3 +1,5 @@
+# legacy/*_original* are the untouched pre-rebuild snapshot; keep them byte-for-byte
+exclude: ^legacy/.*_original\.(py|md)$
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.15.7

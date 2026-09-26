@@ -13,7 +13,9 @@ import torch.nn.functional as F
 
 
 @torch.no_grad()
-def sinkhorn_plan(x: torch.Tensor, y: torch.Tensor, reg: float, iters: int, diag_mask: bool, quadratic: bool = True) -> torch.Tensor:
+def sinkhorn_plan(
+    x: torch.Tensor, y: torch.Tensor, reg: float, iters: int, diag_mask: bool, quadratic: bool = True
+) -> torch.Tensor:
     """Balanced log-domain Sinkhorn, batched over dim 0. x [B,N,D], y [B,M,D] -> plan [B,N,M]."""
     b, n, _ = x.shape
     m = y.shape[1]
@@ -34,7 +36,9 @@ def sinkhorn_plan(x: torch.Tensor, y: torch.Tensor, reg: float, iters: int, diag
 
 
 @torch.no_grad()
-def barycentric_map(x: torch.Tensor, y: torch.Tensor, reg: float, iters: int, diag_mask: bool) -> torch.Tensor:
+def barycentric_map(
+    x: torch.Tensor, y: torch.Tensor, reg: float, iters: int, diag_mask: bool
+) -> torch.Tensor:
     pi = sinkhorn_plan(x, y, reg, iters, diag_mask)
     return (pi @ y) / pi.sum(-1, keepdim=True).clamp_min(1e-12)
 
@@ -63,7 +67,9 @@ def wflow_loss(
         info = {}
         for r in r_list:
             reg = float(r) * s  # regularisation scales with the quadratic cost magnitude
-            v = barycentric_map(old_s, pos_s, reg, iters, False) - barycentric_map(old_s, old_s, reg, iters, True)
+            v = barycentric_map(old_s, pos_s, reg, iters, False) - barycentric_map(
+                old_s, old_s, reg, iters, True
+            )
             f = v.pow(2).mean()
             info[f"v_rms_{r}"] = float(f.sqrt())
             v_agg += v / f.sqrt().clamp_min(1e-4)
@@ -86,7 +92,9 @@ def latent_feature_maps(z: torch.Tensor) -> dict[str, torch.Tensor]:
     return feats
 
 
-def grouped_wflow_loss(gen_z: torch.Tensor, pos_z: torch.Tensor, groups: int, **kw) -> tuple[torch.Tensor, dict]:
+def grouped_wflow_loss(
+    gen_z: torch.Tensor, pos_z: torch.Tensor, groups: int, **kw
+) -> tuple[torch.Tensor, dict]:
     """gen_z [G*n, C,H,W], pos_z [G*m, C,H,W] ordered by group. Each (group, location) is its own OT problem."""
     total, info = 0.0, {}
     gf, pf = latent_feature_maps(gen_z), latent_feature_maps(pos_z)

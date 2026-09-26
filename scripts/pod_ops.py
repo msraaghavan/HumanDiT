@@ -35,8 +35,16 @@ import runpod_ctl as rp
 STATE = Path(".pod.json")
 KEY = Path.home() / ".ssh" / "runpod_humandit_ed25519"
 REMOTE = "/workspace/humandit"
-SSH_OPTS = ["-i", str(KEY), "-o", "StrictHostKeyChecking=accept-new", "-o", "ServerAliveInterval=30",
-            "-o", "LogLevel=ERROR"]
+SSH_OPTS = [
+    "-i",
+    str(KEY),
+    "-o",
+    "StrictHostKeyChecking=accept-new",
+    "-o",
+    "ServerAliveInterval=30",
+    "-o",
+    "LogLevel=ERROR",
+]
 
 
 def _state() -> dict:
@@ -63,14 +71,16 @@ def run(st: dict, script: str, timeout: int = 600) -> str:
     proc = subprocess.run(cmd, input=stdin.encode(), capture_output=True, timeout=timeout, check=False)
     out = ANSI.sub("", (proc.stdout + proc.stderr).decode(errors="replace").replace("\r\n", "\n"))
     if begin in out:
-        out = out[out.index(begin) + len(begin):]
+        out = out[out.index(begin) + len(begin) :]
         out = out[: out.index(end)] if end in out else out
     return out.strip("\n")
 
 
 def _pod_host_id(pod_id: str) -> str | None:
-    q = ("query P($input: PodFilter!) { pod(input: $input) { desiredStatus runtime { uptimeInSeconds } "
-         "machine { podHostId } } }")
+    q = (
+        "query P($input: PodFilter!) { pod(input: $input) { desiredStatus runtime { uptimeInSeconds } "
+        "machine { podHostId } } }"
+    )
     pod = rp.gql(q, {"input": {"podId": pod_id}}).get("pod") or {}
     if not (pod.get("runtime") or {}).get("uptimeInSeconds"):
         return None
@@ -103,10 +113,20 @@ def create(a: argparse.Namespace) -> dict:
     pub = Path(str(KEY) + ".pub").read_text().strip()
     proxy = a.mode == "proxy"
     body = {
-        "name": "humandit", "imageName": rp.IMAGE, "gpuTypeIds": [a.gpu], "gpuCount": 1, "cloudType": a.cloud,
-        "containerDiskInGb": a.container_disk, "volumeInGb": a.volume, "volumeMountPath": "/workspace",
-        "ports": ["8000/http"] if proxy else ["22/tcp", "8000/http"], "supportPublicIp": not proxy,
-        "minVCPUPerGPU": a.min_vcpu, "minRAMPerGPU": a.min_ram, "env": {"PUBLIC_KEY": pub}, "interruptible": False,
+        "name": "humandit",
+        "imageName": rp.IMAGE,
+        "gpuTypeIds": [a.gpu],
+        "gpuCount": 1,
+        "cloudType": a.cloud,
+        "containerDiskInGb": a.container_disk,
+        "volumeInGb": a.volume,
+        "volumeMountPath": "/workspace",
+        "ports": ["8000/http"] if proxy else ["22/tcp", "8000/http"],
+        "supportPublicIp": not proxy,
+        "minVCPUPerGPU": a.min_vcpu,
+        "minRAMPerGPU": a.min_ram,
+        "env": {"PUBLIC_KEY": pub},
+        "interruptible": False,
     }
     t0 = time.time()
     while True:  # Community stock fluctuates minute to minute; nothing is billed until creation succeeds
@@ -172,9 +192,11 @@ def check_host(st: dict, min_power_w: float, min_tflops: float) -> tuple[bool, s
     tf = float(tflops.group(1)) if tflops else 0.0
     stop_ok = bool(selfstop) and selfstop.group(1) != "none"
     err = re.search(r"^PROBE_ERR (.*)$", probe, re.M)
-    msg = (f"{name}: power limit {power:.0f} W, utilisation {util:.0f}%, memory in use {mem:.0f} MiB, "
-           f"cuInit {cuinit.group(1) if cuinit else '?'}, bf16 GEMM {tf:.0f} TFLOPS, "
-           f"self-stop {selfstop.group(1) if selfstop else '?'}" + (f" [{err.group(1)}]" if err else ""))
+    msg = (
+        f"{name}: power limit {power:.0f} W, utilisation {util:.0f}%, memory in use {mem:.0f} MiB, "
+        f"cuInit {cuinit.group(1) if cuinit else '?'}, bf16 GEMM {tf:.0f} TFLOPS, "
+        f"self-stop {selfstop.group(1) if selfstop else '?'}" + (f" [{err.group(1)}]" if err else "")
+    )
     healthy = power >= min_power_w and util <= 10 and mem <= 1024 and cu_ok and tf >= min_tflops and stop_ok
     return healthy, msg
 
@@ -186,7 +208,10 @@ def launch(a: argparse.Namespace) -> None:
         st = wait_ready(create(a))
         STATE.write_text(json.dumps(st, indent=2))
         healthy, msg = check_host(st, a.min_power_w, a.min_tflops)
-        print(f"[pod] host check ({attempt}/{a.max_hosts}): {msg} -> {'OK' if healthy else 'REJECTED'}", flush=True)
+        print(
+            f"[pod] host check ({attempt}/{a.max_hosts}): {msg} -> {'OK' if healthy else 'REJECTED'}",
+            flush=True,
+        )
         if healthy:
             break
         if not a.auto_reject:
@@ -229,8 +254,10 @@ def push(_: argparse.Namespace) -> None:
     st = _state()
     b64 = base64.encodebytes(_code_tarball()).decode()  # 76-char lines: safe for a pseudo-terminal
     ok = f"SHIP_OK_{secrets.token_hex(4)}"
-    script = (f"mkdir -p {REMOTE} && base64 -d > /tmp/code.tgz <<'B64EOF'\n{b64}B64EOF\n"
-              f"tar xzf /tmp/code.tgz -C {REMOTE} && echo {ok}")
+    script = (
+        f"mkdir -p {REMOTE} && base64 -d > /tmp/code.tgz <<'B64EOF'\n{b64}B64EOF\n"
+        f"tar xzf /tmp/code.tgz -C {REMOTE} && echo {ok}"
+    )
     out = run(st, script, timeout=900)
     if ok not in out:
         sys.exit(f"code upload failed:\n{out[-2000:]}")
@@ -239,19 +266,27 @@ def push(_: argparse.Namespace) -> None:
 
 def start(a: argparse.Namespace) -> None:
     st = _state()
-    env = (f"BUDGET_USD={a.budget} USD_PER_HOUR={st['usd_per_hour'] + a.disk_usd_per_hour:.3f} "
-           f"STUDENT_MIN={a.student_min} AUTO_STOP={int(a.auto_stop)} GRACE_MIN={a.grace_min}")
+    env = (
+        f"BUDGET_USD={a.budget} USD_PER_HOUR={st['usd_per_hour'] + a.disk_usd_per_hour:.3f} "
+        f"STUDENT_MIN={a.student_min} AUTO_STOP={int(a.auto_stop)} GRACE_MIN={a.grace_min}"
+    )
     ok = f"STARTED_{secrets.token_hex(4)}"
-    out = run(st, f"cd {REMOTE} && setsid nohup env {env} bash scripts/pod/run_all.sh "
-                  f"> /workspace/run_all.log 2>&1 < /dev/null & sleep 3; pgrep -f run_all.sh >/dev/null && echo {ok}")
+    out = run(
+        st,
+        f"cd {REMOTE} && setsid nohup env {env} bash scripts/pod/run_all.sh "
+        f"> /workspace/run_all.log 2>&1 < /dev/null & sleep 3; pgrep -f run_all.sh >/dev/null && echo {ok}",
+    )
     if ok not in out:
         sys.exit(f"pipeline did not start:\n{out[-2000:]}")
     print(f"[pod] pipeline started ({env}); follow with: uv run python scripts/pod_ops.py logs", flush=True)
 
 
 def logs(a: argparse.Namespace) -> None:
-    out = run(_state(), f"tail -n {a.n} /workspace/run_all.log; echo; nvidia-smi --query-gpu=utilization.gpu,"
-                        "memory.used,temperature.gpu --format=csv,noheader; echo stages done: $(ls /workspace/state)")
+    out = run(
+        _state(),
+        f"tail -n {a.n} /workspace/run_all.log; echo; nvidia-smi --query-gpu=utilization.gpu,"
+        "memory.used,temperature.gpu --format=csv,noheader; echo stages done: $(ls /workspace/state)",
+    )
     print(out.strip())
 
 
@@ -259,13 +294,21 @@ def pull(a: argparse.Namespace) -> None:
     st = _state()
     token = secrets.token_hex(16)  # unguessable file name while the temporary server is up
     ok = f"SERVING_{secrets.token_hex(4)}"
-    paths = a.paths or ("runs/eval/*.json runs/eval/*.png runs/rae_gate/metrics.json runs/rae_gate/recon_grid.png "
-                        "runs/attributes runs/*/ckpt/ema.safetensors runs/*/student.safetensors runs/*/samples/*.png "
-                        "runs/*/metrics.jsonl runs/*/train_summary.json runs/*/summary.json logs")
-    run(st, (f"mkdir -p /workspace/share && cd /workspace && tar czf /workspace/share/{token}.tgz "
-             f"--ignore-failed-read {paths} "
-             f"2>/dev/null; cd /workspace/share && (setsid nohup python3 -m http.server 8000 >/dev/null 2>&1 &) ; "
-             f"sleep 2; echo {ok}"), timeout=1800)
+    paths = a.paths or (
+        "runs/eval/*.json runs/eval/*.png runs/rae_gate/metrics.json runs/rae_gate/recon_grid.png "
+        "runs/attributes runs/*/ckpt/ema.safetensors runs/*/student.safetensors runs/*/samples/*.png "
+        "runs/*/metrics.jsonl runs/*/train_summary.json runs/*/summary.json logs"
+    )
+    run(
+        st,
+        (
+            f"mkdir -p /workspace/share && cd /workspace && tar czf /workspace/share/{token}.tgz "
+            f"--ignore-failed-read {paths} "
+            f"2>/dev/null; cd /workspace/share && (setsid nohup python3 -m http.server 8000 >/dev/null 2>&1 &) ; "
+            f"sleep 2; echo {ok}"
+        ),
+        timeout=1800,
+    )
     url = f"https://{st['id']}-8000.proxy.runpod.net/{token}.tgz"
     dest = Path(a.dest)
     dest.mkdir(parents=True, exist_ok=True)
@@ -279,7 +322,9 @@ def pull(a: argparse.Namespace) -> None:
         run(st, "pkill -f 'http.server 8000'; rm -rf /workspace/share")
     with tarfile.open(tmp) as t:
         t.extractall(dest, filter="data")
-    print(f"[pod] pulled {tmp.stat().st_size / 1e6:.1f} MB into {dest}/ (temporary server stopped)", flush=True)
+    print(
+        f"[pod] pulled {tmp.stat().st_size / 1e6:.1f} MB into {dest}/ (temporary server stopped)", flush=True
+    )
     tmp.unlink()
 
 
@@ -288,8 +333,11 @@ def get(a: argparse.Namespace) -> None:
     st = _state()
     remote = a.remote
     if a.latest:  # newest file matching a glob, e.g. '/workspace/runs/teacher_b/samples/*.png'
-        found = [ln.strip() for ln in run(st, f"ls -t {a.remote} 2>/dev/null | head -1").splitlines()
-                 if ln.strip().startswith("/")]
+        found = [
+            ln.strip()
+            for ln in run(st, f"ls -t {a.remote} 2>/dev/null | head -1").splitlines()
+            if ln.strip().startswith("/")
+        ]
         if not found:
             sys.exit(f"no file matches {a.remote} yet")
         remote = found[0]
@@ -318,7 +366,9 @@ def main() -> None:
     la.add_argument("--mode", default="proxy", choices=["proxy", "direct"])
     la.add_argument("--budget", type=float, required=True, help="total USD for the whole pipeline")
     la.add_argument("--usd-per-hour", type=float, default=0.34)
-    la.add_argument("--disk-usd-per-hour", type=float, default=0.03, help="storage cost added to the GPU rate")
+    la.add_argument(
+        "--disk-usd-per-hour", type=float, default=0.03, help="storage cost added to the GPU rate"
+    )
     la.add_argument("--student-min", type=float, default=45)
     la.add_argument("--container-disk", type=int, default=130)
     la.add_argument("--volume", type=int, default=40)
@@ -329,14 +379,21 @@ def main() -> None:
     la.add_argument("--grace-min", type=int, default=60)
     la.add_argument("--force", action="store_true")
     la.add_argument("--min-power-w", type=float, default=300, help="reject GPUs power-capped below this")
-    la.add_argument("--min-tflops", type=float, default=100, help="reject GPUs below this bf16 GEMM rate (4090 ~150)")
+    la.add_argument(
+        "--min-tflops", type=float, default=100, help="reject GPUs below this bf16 GEMM rate (4090 ~150)"
+    )
     la.add_argument("--auto-reject", action="store_true", help="terminate unhealthy fresh pods and retry")
     la.add_argument("--max-hosts", type=int, default=4)
     la.set_defaults(fn=launch)
     rs = sub.add_parser("resume")
-    for flag, kw in (("--budget", dict(type=float, required=True)), ("--disk-usd-per-hour", dict(type=float, default=0.03)),
-                     ("--student-min", dict(type=float, default=45)), ("--grace-min", dict(type=int, default=60)),
-                     ("--min-power-w", dict(type=float, default=300)), ("--min-tflops", dict(type=float, default=100))):
+    for flag, kw in (
+        ("--budget", dict(type=float, required=True)),
+        ("--disk-usd-per-hour", dict(type=float, default=0.03)),
+        ("--student-min", dict(type=float, default=45)),
+        ("--grace-min", dict(type=int, default=60)),
+        ("--min-power-w", dict(type=float, default=300)),
+        ("--min-tflops", dict(type=float, default=100)),
+    ):
         rs.add_argument(flag, **kw)
     rs.set_defaults(fn=resume, auto_stop=True)
     sub.add_parser("push").set_defaults(fn=push)
@@ -345,7 +402,9 @@ def main() -> None:
     lg.set_defaults(fn=logs)
     pl = sub.add_parser("pull")
     pl.add_argument("--dest", default=".")
-    pl.add_argument("--paths", default=None, help="space-separated globs under /workspace (default: all results)")
+    pl.add_argument(
+        "--paths", default=None, help="space-separated globs under /workspace (default: all results)"
+    )
     pl.set_defaults(fn=pull)
     gt = sub.add_parser("get")
     gt.add_argument("remote", help="remote path, or a glob with --latest")

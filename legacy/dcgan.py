@@ -29,11 +29,20 @@ class Generator(nn.Module):
     def __init__(self, latent_dim: int = 100, ngf: int = 64):
         super().__init__()
         self.model = nn.Sequential(
-            nn.ConvTranspose2d(latent_dim, ngf * 8, 4, 1, 0, bias=False), nn.BatchNorm2d(ngf * 8), nn.ReLU(True),
-            nn.ConvTranspose2d(ngf * 8, ngf * 4, 4, 2, 1, bias=False), nn.BatchNorm2d(ngf * 4), nn.ReLU(True),
-            nn.ConvTranspose2d(ngf * 4, ngf * 2, 4, 2, 1, bias=False), nn.BatchNorm2d(ngf * 2), nn.ReLU(True),
-            nn.ConvTranspose2d(ngf * 2, ngf, 4, 2, 1, bias=False), nn.BatchNorm2d(ngf), nn.ReLU(True),
-            nn.ConvTranspose2d(ngf, 3, 4, 2, 1, bias=False), nn.Tanh(),
+            nn.ConvTranspose2d(latent_dim, ngf * 8, 4, 1, 0, bias=False),
+            nn.BatchNorm2d(ngf * 8),
+            nn.ReLU(True),
+            nn.ConvTranspose2d(ngf * 8, ngf * 4, 4, 2, 1, bias=False),
+            nn.BatchNorm2d(ngf * 4),
+            nn.ReLU(True),
+            nn.ConvTranspose2d(ngf * 4, ngf * 2, 4, 2, 1, bias=False),
+            nn.BatchNorm2d(ngf * 2),
+            nn.ReLU(True),
+            nn.ConvTranspose2d(ngf * 2, ngf, 4, 2, 1, bias=False),
+            nn.BatchNorm2d(ngf),
+            nn.ReLU(True),
+            nn.ConvTranspose2d(ngf, 3, 4, 2, 1, bias=False),
+            nn.Tanh(),
         )
 
     def forward(self, z: torch.Tensor) -> torch.Tensor:
@@ -44,10 +53,17 @@ class Discriminator(nn.Module):
     def __init__(self, ndf: int = 64):
         super().__init__()
         self.model = nn.Sequential(
-            nn.Conv2d(3, ndf, 4, 2, 1, bias=False), nn.LeakyReLU(0.2, inplace=True),
-            nn.Conv2d(ndf, ndf * 2, 4, 2, 1, bias=False), nn.BatchNorm2d(ndf * 2), nn.LeakyReLU(0.2, inplace=True),
-            nn.Conv2d(ndf * 2, ndf * 4, 4, 2, 1, bias=False), nn.BatchNorm2d(ndf * 4), nn.LeakyReLU(0.2, inplace=True),
-            nn.Conv2d(ndf * 4, ndf * 8, 4, 2, 1, bias=False), nn.BatchNorm2d(ndf * 8), nn.LeakyReLU(0.2, inplace=True),
+            nn.Conv2d(3, ndf, 4, 2, 1, bias=False),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Conv2d(ndf, ndf * 2, 4, 2, 1, bias=False),
+            nn.BatchNorm2d(ndf * 2),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Conv2d(ndf * 2, ndf * 4, 4, 2, 1, bias=False),
+            nn.BatchNorm2d(ndf * 4),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Conv2d(ndf * 4, ndf * 8, 4, 2, 1, bias=False),
+            nn.BatchNorm2d(ndf * 8),
+            nn.LeakyReLU(0.2, inplace=True),
             nn.Conv2d(ndf * 8, 1, 4, 1, 0, bias=False),  # logits (the original applied Sigmoid here)
         )
 
@@ -95,7 +111,9 @@ def train(args: argparse.Namespace) -> None:
             real = torch.where(torch.rand(len(real), 1, 1, 1, device=dev) < 0.5, real, real.flip(-1))
             z = torch.randn(len(real), 100, 1, 1, device=dev)
             fake = g(z)
-            ld = bce(d(real), torch.ones(len(real), device=dev)) + bce(d(fake.detach()), torch.zeros(len(real), device=dev))
+            ld = bce(d(real), torch.ones(len(real), device=dev)) + bce(
+                d(fake.detach()), torch.zeros(len(real), device=dev)
+            )
             opt_d.zero_grad()
             ld.backward()
             opt_d.step()
@@ -105,8 +123,11 @@ def train(args: argparse.Namespace) -> None:
             opt_g.step()
             step += 1
         epoch += 1
-        print(f"[dcgan] epoch {epoch} step {step} loss_d {ld.item():.3f} loss_g {lg.item():.3f} "
-              f"{(time.perf_counter() - t0) / 60:.1f} min", flush=True)
+        print(
+            f"[dcgan] epoch {epoch} step {step} loss_d {ld.item():.3f} loss_g {lg.item():.3f} "
+            f"{(time.perf_counter() - t0) / 60:.1f} min",
+            flush=True,
+        )
     g.eval()
     with torch.no_grad():
         save_image(g(fixed) * 0.5 + 0.5, out / "samples.png", nrow=5)
@@ -148,13 +169,29 @@ def fid(args: argparse.Namespace) -> None:
 
     shutil.rmtree(args.out, ignore_errors=True)  # never score stale images from an earlier run
     sample(args)
-    result = {"tag": "legacy_dcgan_64px", "ckpt": args.ckpt, "n": args.n, "resolution": 64,
-              "note": "64x64 samples; clean-fid resizes them to the Inception input like every other model",
-              "git": subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip()}
+    result = {
+        "tag": "legacy_dcgan_64px",
+        "ckpt": args.ckpt,
+        "n": args.n,
+        "resolution": 64,
+        "note": "64x64 samples; clean-fid resizes them to the Inception input like every other model",
+        "git": subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True
+        ).stdout.strip(),
+    }
     for mode in ("clean", "legacy_tensorflow"):
-        result[f"fid_{mode}"] = round(cfid.compute_fid(
-            args.out, dataset_name="ffhq", dataset_res=256, dataset_split="trainval70k", mode=mode,
-            num_workers=0 if os.name == "nt" else 8, verbose=False), 3)
+        result[f"fid_{mode}"] = round(
+            cfid.compute_fid(
+                args.out,
+                dataset_name="ffhq",
+                dataset_res=256,
+                dataset_split="trainval70k",
+                mode=mode,
+                num_workers=0 if os.name == "nt" else 8,
+                verbose=False,
+            ),
+            3,
+        )
         print(f"[dcgan] FID ({mode}) = {result[f'fid_{mode}']}", flush=True)
     # Resolution-matched comparison: the 256 reference penalises a 64 px model for blur alone, so also score
     # it against all 70k FFHQ faces downsampled to 64x64 (same resizer as training).
@@ -168,8 +205,12 @@ def fid(args: argparse.Namespace) -> None:
             for c in batch["image"]:
                 Image.fromarray(decode_image(c, 64)).save(real64 / f"{k:06d}.png")
                 k += 1
-    result["fid_clean_64px_vs_ffhq64"] = round(cfid.compute_fid(
-        args.out, str(real64), mode="clean", num_workers=0 if os.name == "nt" else 8, verbose=False), 3)
+    result["fid_clean_64px_vs_ffhq64"] = round(
+        cfid.compute_fid(
+            args.out, str(real64), mode="clean", num_workers=0 if os.name == "nt" else 8, verbose=False
+        ),
+        3,
+    )
     print(f"[dcgan] FID (clean, 64 px vs FFHQ-64) = {result['fid_clean_64px_vs_ffhq64']}", flush=True)
     Path(args.json).parent.mkdir(parents=True, exist_ok=True)
     Path(args.json).write_text(json.dumps(result, indent=2))

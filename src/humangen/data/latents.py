@@ -45,7 +45,11 @@ class LatentDataset(Dataset):
     def __getitem__(self, i: int) -> tuple[torch.Tensor, torch.Tensor]:
         f = int(torch.randint(self.flips, ()).item())
         z = torch.from_numpy(np.array(self._latents()[i, f]))  # float16 (C, H, W)
-        a = torch.from_numpy(self.attrs[i].astype(np.int64)) if self.attrs.shape[1] else torch.zeros(0, dtype=torch.long)
+        a = (
+            torch.from_numpy(self.attrs[i].astype(np.int64))
+            if self.attrs.shape[1]
+            else torch.zeros(0, dtype=torch.long)
+        )
         return z, a
 
 

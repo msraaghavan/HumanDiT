@@ -22,7 +22,10 @@ from humangen.utils.device import get_precision
 
 
 def summary(z: torch.Tensor) -> dict:
-    return {"std": round(float(z.std()), 4), "pooled_norm": round(float(z.mean(dim=(-2, -1)).norm(dim=1).mean()), 3)}
+    return {
+        "std": round(float(z.std()), 4),
+        "pooled_norm": round(float(z.mean(dim=(-2, -1)).norm(dim=1).mean()), 3),
+    }
 
 
 def main() -> None:
@@ -39,8 +42,13 @@ def main() -> None:
     model, _, meta = load_generator(a.ckpt, prec.device)
     lat = np.load(Path(a.cache) / "latents.npy", mmap_mode="r")
     idx = np.random.default_rng(0).choice(len(lat), min(256, len(lat)), replace=False)
-    result = {"ckpt": a.ckpt, "ckpt_step": meta.get("step"), "n": a.n, "steps": a.steps,
-              "real": summary(torch.from_numpy(np.array(lat[np.sort(idx), 0])).float())}
+    result = {
+        "ckpt": a.ckpt,
+        "ckpt_step": meta.get("step"),
+        "n": a.n,
+        "steps": a.steps,
+        "real": summary(torch.from_numpy(np.array(lat[np.sort(idx), 0])).float()),
+    }
     transport = Transport(shift=dimension_shift(1024 * 16 * 16))
     for ig in a.ig:
         zs = []
@@ -49,7 +57,13 @@ def main() -> None:
             noise = torch.randn(min(a.batch, a.n - i), 1024, 16, 16, generator=g).to(prec.device)
             attrs = torch.zeros(len(noise), model.cfg.num_attributes, dtype=torch.long, device=prec.device)
             with torch.no_grad(), prec.autocast():
-                zs.append(transport.sample(guided_model_fn(model, attrs, GuidanceConfig(ig_scale=ig)), noise, a.steps).float().cpu())
+                zs.append(
+                    transport.sample(
+                        guided_model_fn(model, attrs, GuidanceConfig(ig_scale=ig)), noise, a.steps
+                    )
+                    .float()
+                    .cpu()
+                )
         result[f"ig_{ig:.2f}"] = summary(torch.cat(zs))
         print(f"[stats] IG {ig:.2f}: {result[f'ig_{ig:.2f}']} (real {result['real']})", flush=True)
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)

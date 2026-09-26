@@ -34,8 +34,14 @@ STATE = {"any": AttributeTokens.NULL, "yes": AttributeTokens.YES, "no": Attribut
 
 
 class Engine:
-    def __init__(self, teacher: str | None, student: str | None, probe: str | None, eval_dir: str,
-                 onnx_dir: str | None = None):
+    def __init__(
+        self,
+        teacher: str | None,
+        student: str | None,
+        probe: str | None,
+        eval_dir: str,
+        onnx_dir: str | None = None,
+    ):
         self.prec = get_precision()
         self.dev = self.prec.device
         self.transport = Transport(shift=dimension_shift(1024 * 16 * 16))
@@ -81,7 +87,9 @@ class Engine:
     def sample(self, noise, attrs, mode: str, steps: int, cfg: float, ig: float, trajectory: bool = False):
         with self.prec.autocast():
             if mode.startswith("1-step") and self.ort_gen is not None:
-                z = self.ort_gen.run(None, {"noise": noise.float().cpu().numpy(), "attrs": attrs.cpu().numpy()})[0]
+                z = self.ort_gen.run(
+                    None, {"noise": noise.float().cpu().numpy(), "attrs": attrs.cpu().numpy()}
+                )[0]
                 return torch.from_numpy(z), []
             if mode.startswith("1-step") and self.student is not None:
                 return one_step_sampler(self.student, 1)(noise, attrs).float(), []
@@ -104,7 +112,9 @@ class Engine:
         if self.probe is None:
             return []
         p = self.probe.probs(z.mean(dim=(-2, -1))).cpu().numpy()
-        return [{n: round(float(v), 3) for n, v in zip(self.probe.display_names, row, strict=True)} for row in p]
+        return [
+            {n: round(float(v), 3) for n, v in zip(self.probe.display_names, row, strict=True)} for row in p
+        ]
 
     def save_png(self, img: Image.Image, details: str) -> str:
         f = tempfile.NamedTemporaryFile(suffix=".png", delete=False)  # noqa: SIM115
@@ -114,7 +124,8 @@ class Engine:
 
 def build_ui(e: Engine) -> gr.Blocks:
     modes = (["1-step (real-time student)"] if e.student is not None else []) + (
-        ["Teacher (multi-step ODE)"] if e.teacher is not None else [])
+        ["Teacher (multi-step ODE)"] if e.teacher is not None else []
+    )
     with gr.Blocks(title="HumanDiT") as demo:
         gr.Markdown(
             "# HumanDiT: controllable synthetic faces\n"
@@ -129,7 +140,11 @@ def build_ui(e: Engine) -> gr.Blocks:
             radios = []
             with gr.Row():
                 for name in e.attr_names:
-                    radios.append(gr.Radio(["any", "yes", "no"], value="any", label=name.replace("_", " "), min_width=120))
+                    radios.append(
+                        gr.Radio(
+                            ["any", "yes", "no"], value="any", label=name.replace("_", " "), min_width=120
+                        )
+                    )
             return radios
 
         with gr.Tab("Generate"):
@@ -160,18 +175,26 @@ def build_ui(e: Engine) -> gr.Blocks:
                 t2 = time.perf_counter()
                 imgs = [add_watermark(im) for im in imgs]
                 t3 = time.perf_counter()
-                msg = (f"**{mode_}** · generator {1000 * (t1 - t0) / n:.0f} ms/face · decoder "
-                       f"{1000 * (t2 - t1) / n:.0f} ms/face · watermark (CPU) {1000 * (t3 - t2) / n:.0f} ms/face · "
-                       f"total {t3 - t0:.2f} s for {n}")
+                msg = (
+                    f"**{mode_}** · generator {1000 * (t1 - t0) / n:.0f} ms/face · decoder "
+                    f"{1000 * (t2 - t1) / n:.0f} ms/face · watermark (CPU) {1000 * (t3 - t2) / n:.0f} ms/face · "
+                    f"total {t3 - t0:.2f} s for {n}"
+                )
                 return imgs, msg, e.describe(z)
 
-            go.click(generate, [mode, seed, count, steps, cfg, ig, *attr_inputs], [gallery, timing, probe_out])
+            go.click(
+                generate, [mode, seed, count, steps, cfg, ig, *attr_inputs], [gallery, timing, probe_out]
+            )
 
         with gr.Tab("Edit"):
-            gr.Markdown("Same seed (same noise), one attribute flipped. Identity is *encouraged*, not guaranteed.")
+            gr.Markdown(
+                "Same seed (same noise), one attribute flipped. Identity is *encouraged*, not guaranteed."
+            )
             with gr.Row():
                 e_seed = gr.Number(value=7, precision=0, label="Seed")
-                e_attr = gr.Dropdown(e.attr_names, value=e.attr_names[0] if e.attr_names else None, label="Attribute")
+                e_attr = gr.Dropdown(
+                    e.attr_names, value=e.attr_names[0] if e.attr_names else None, label="Attribute"
+                )
                 e_mode = gr.Radio(modes, value=modes[-1], label="Sampler")
                 e_go = gr.Button("Show absent vs present", variant="primary")
             with gr.Row():
@@ -216,7 +239,9 @@ def build_ui(e: Engine) -> gr.Blocks:
             m_go.click(morph, [m_a, m_b, m_frames, m_mode], m_video)
 
         with gr.Tab("Under the hood"):
-            gr.Markdown("Teacher denoising trajectory: the clean-latent prediction x̂₀ decoded at several ODE steps.")
+            gr.Markdown(
+                "Teacher denoising trajectory: the clean-latent prediction x̂₀ decoded at several ODE steps."
+            )
             with gr.Row():
                 u_seed = gr.Number(value=3, precision=0, label="Seed")
                 u_go = gr.Button("Show trajectory", variant="primary")
@@ -225,31 +250,62 @@ def build_ui(e: Engine) -> gr.Blocks:
             for f in sorted(e.eval_dir.glob("*.json")):
                 try:
                     r = json.loads(f.read_text())
-                    results[r.get("tag", f.stem)] = {k: r.get(k) for k in (
-                        "fid_clean", "fid_legacy_tensorflow", "fd_dinov2", "precision", "recall", "steps")}
+                    results[r.get("tag", f.stem)] = {
+                        k: r.get(k)
+                        for k in (
+                            "fid_clean",
+                            "fid_legacy_tensorflow",
+                            "fd_dinov2",
+                            "precision",
+                            "recall",
+                            "steps",
+                        )
+                    }
                 except Exception:
                     continue
-            gr.JSON(value=results or {"note": "run scripts/evaluate.py to populate"}, label="Measured metrics (runs/eval)")
+            gr.JSON(
+                value=results or {"note": "run scripts/evaluate.py to populate"},
+                label="Measured metrics (runs/eval)",
+            )
             pairs = sorted(e.eval_dir.glob("*_nearest_pairs.png"))
             if pairs:
-                gr.Image(str(pairs[0]), label="Memorisation audit: most similar generated (top) vs training (bottom)")
+                gr.Image(
+                    str(pairs[0]),
+                    label="Memorisation audit: most similar generated (top) vs training (bottom)",
+                )
 
             def trajectory(seed_):
                 if e.teacher is None:
                     return []
                 _, traj = e.sample(e.noise(seed_), e.attrs([]), "Teacher", 50, 1.0, 1.78, trajectory=True)
                 pick = [0, 5, 10, 20, 35, 49]
-                return [(img, f"step {i + 1}") for i, img in zip(pick, e.decode(torch.cat([traj[i] for i in pick]).float()), strict=True)]
+                return [
+                    (img, f"step {i + 1}")
+                    for i, img in zip(pick, e.decode(torch.cat([traj[i] for i in pick]).float()), strict=True)
+                ]
 
             u_go.click(trajectory, u_seed, u_gallery)
 
         with gr.Tab("Check watermark"):
             w_in = gr.Image(type="pil", label="Upload an image")
             w_out = gr.Markdown()
-            w_in.change(lambda im: "" if im is None else ("✅ HumanDiT watermark detected" if check_watermark(im)
-                                                           else "No HumanDiT watermark found"), w_in, w_out)
-        gr.Markdown("Research demo. Trained on FFHQ (CC BY-NC-SA 4.0) with RAEv2 (CC BY-NC 4.0) and DINOv3 (DINOv3 "
-                    "License) components: **non-commercial use only**. See MODEL_CARD.md for limitations and bias.")
+            w_in.change(
+                lambda im: (
+                    ""
+                    if im is None
+                    else (
+                        "✅ HumanDiT watermark detected"
+                        if check_watermark(im)
+                        else "No HumanDiT watermark found"
+                    )
+                ),
+                w_in,
+                w_out,
+            )
+        gr.Markdown(
+            "Research demo. Trained on FFHQ (CC BY-NC-SA 4.0) with RAEv2 (CC BY-NC 4.0) and DINOv3 (DINOv3 "
+            "License) components: **non-commercial use only**. See MODEL_CARD.md for limitations and bias."
+        )
     return demo
 
 

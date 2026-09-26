@@ -37,7 +37,9 @@ def guided_model_fn(model: nn.Module, attrs: torch.Tensor, g: GuidanceConfig):
     def ig(x_full: torch.Tensor, x_base: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         if g.ig_scale == 1.0:
             return x_full
-        return torch.where(_in(t, g.ig_t_min, g.ig_t_max, x_full), x_base + g.ig_scale * (x_full - x_base), x_full)
+        return torch.where(
+            _in(t, g.ig_t_min, g.ig_t_max, x_full), x_base + g.ig_scale * (x_full - x_base), x_full
+        )
 
     def fn(x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         if not use_cfg:

@@ -77,7 +77,9 @@ def main() -> None:
     ap.add_argument("--out", default="runs/eval")
     ap.add_argument("--keep-images", action="store_true")
     ap.add_argument("--control-n", type=int, default=256)
-    ap.add_argument("--real-limit", type=int, default=None, help="real images for DINOv2 stats (default: all)")
+    ap.add_argument(
+        "--real-limit", type=int, default=None, help="real images for DINOv2 stats (default: all)"
+    )
     args = ap.parse_args()
     metrics = set(args.metrics.split(","))
 
@@ -89,12 +91,23 @@ def main() -> None:
     model, attr_names, meta = load_generator(args.ckpt, dev)
     k = model.cfg.num_attributes
     guidance = GuidanceConfig(ig_scale=args.ig_scale, ig_t_min=args.ig_tmin, cfg_scale=1.0)
-    sample_fn = (teacher_sampler(model, guidance, args.steps, args.method) if args.kind == "teacher"
-                 else one_step_sampler(model, args.steps))
+    sample_fn = (
+        teacher_sampler(model, guidance, args.steps, args.method)
+        if args.kind == "teacher"
+        else one_step_sampler(model, args.steps)
+    )
     rae = RAE(load_encoder=False).to(dev)
-    result: dict = {"tag": args.tag, "ckpt": args.ckpt, "kind": args.kind, "steps": args.steps, "n": args.n,
-                    "guidance": vars(guidance), "gpu": torch.cuda.get_device_name() if dev.type == "cuda" else "cpu",
-                    "ckpt_step": meta.get("step"), "samples_seen": meta.get("samples_seen")}
+    result: dict = {
+        "tag": args.tag,
+        "ckpt": args.ckpt,
+        "kind": args.kind,
+        "steps": args.steps,
+        "n": args.n,
+        "guidance": vars(guidance),
+        "gpu": torch.cuda.get_device_name() if dev.type == "cuda" else "cpu",
+        "ckpt_step": meta.get("step"),
+        "samples_seen": meta.get("samples_seen"),
+    }
     try:
         result["git"] = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], text=True).strip()
     except Exception:
@@ -124,7 +137,10 @@ def main() -> None:
                     pool.submit(Image.fromarray(a).save, img_dir / f"{written + j:06d}.png")
                 written += len(arr)
             if written and written % (args.batch * 40) == 0:
-                print(f"[eval] {written}/{args.n} images ({written / (time.perf_counter() - t0):.1f}/s)", flush=True)
+                print(
+                    f"[eval] {written}/{args.n} images ({written / (time.perf_counter() - t0):.1f}/s)",
+                    flush=True,
+                )
         pool.shutdown(wait=True)
         result["generation_seconds"] = round(time.perf_counter() - t0, 1)
         if preview:
@@ -134,7 +150,9 @@ def main() -> None:
     rae.cpu()
     torch.cuda.empty_cache()
     if dino is not None:
-        mu_r, sig_r, sub_r = real_dinov2_stats(dino, args.data, out / "ffhq256_dinov2_real.npz", dev, 10000, args.real_limit)
+        mu_r, sig_r, sub_r = real_dinov2_stats(
+            dino, args.data, out / "ffhq256_dinov2_real.npz", dev, 10000, args.real_limit
+        )
         g = torch.cat(dfeats).numpy()
         if "fd_dinov2" in metrics:
             result["fd_dinov2"] = round(frechet_distance(*stats(g), mu_r, sig_r), 2)
@@ -150,9 +168,18 @@ def main() -> None:
     if "fid" in metrics:
         fid, workers = cleanfid()  # SciPy 1.18 + Python 3.14 workarounds; see humangen.eval.metrics.cleanfid
         for mode in ("clean", "legacy_tensorflow"):
-            result[f"fid_{mode}"] = round(fid.compute_fid(
-                str(img_dir), dataset_name="ffhq", dataset_res=256, dataset_split="trainval70k", mode=mode,
-                num_workers=workers, verbose=False), 3)
+            result[f"fid_{mode}"] = round(
+                fid.compute_fid(
+                    str(img_dir),
+                    dataset_name="ffhq",
+                    dataset_res=256,
+                    dataset_split="trainval70k",
+                    mode=mode,
+                    num_workers=workers,
+                    verbose=False,
+                ),
+                3,
+            )
             print(f"[eval] FID ({mode}) = {result[f'fid_{mode}']}", flush=True)
         torch.cuda.empty_cache()
     rae.to(dev)
@@ -160,7 +187,9 @@ def main() -> None:
     # ---------------------------------------------------------------- memorisation audit (DINOv3 space)
     if "memo" in metrics and pooled:
         gen = torch.nn.functional.normalize(torch.cat(pooled)[:10000].to(dev), dim=1)
-        train = torch.nn.functional.normalize(torch.from_numpy(np.load(Path(args.cache) / "pooled.npy")[:, 0]).to(dev), dim=1)
+        train = torch.nn.functional.normalize(
+            torch.from_numpy(np.load(Path(args.cache) / "pooled.npy")[:, 0]).to(dev), dim=1
+        )
         nn_sim, nn_idx = [], []
         for i in range(0, len(gen), 1024):
             s = gen[i : i + 1024] @ train.T
@@ -174,9 +203,12 @@ def main() -> None:
         ref_sim = s.max(dim=1).values.cpu()
         thr = float(torch.quantile(ref_sim, 0.999))
         result["memorization"] = {
-            "gen_nn_sim_p50": round(float(nn_sim.median()), 4), "gen_nn_sim_p99": round(float(torch.quantile(nn_sim, 0.99)), 4),
-            "train_nn_sim_p50": round(float(ref_sim.median()), 4), "train_nn_sim_p99": round(float(torch.quantile(ref_sim, 0.99)), 4),
-            "threshold_train_p99.9": round(thr, 4), "frac_gen_above_threshold": round(float((nn_sim > thr).float().mean()), 5),
+            "gen_nn_sim_p50": round(float(nn_sim.median()), 4),
+            "gen_nn_sim_p99": round(float(torch.quantile(nn_sim, 0.99)), 4),
+            "train_nn_sim_p50": round(float(ref_sim.median()), 4),
+            "train_nn_sim_p99": round(float(torch.quantile(ref_sim, 0.99)), 4),
+            "threshold_train_p99.9": round(thr, 4),
+            "frac_gen_above_threshold": round(float((nn_sim > thr).float().mean()), 5),
         }
         print(f"[eval] memorisation: {result['memorization']}", flush=True)
         if need_images:  # closest pairs: generated (top) vs nearest training image (bottom)
@@ -190,27 +222,48 @@ def main() -> None:
                     idx += 1
                 if all(v is not None for v in want.values()):
                     break
-            gen_imgs = [torch.from_numpy(np.asarray(Image.open(img_dir / f"{t:06d}.png"))).permute(2, 0, 1).float() / 255 for t in top]
-            save_image(torch.stack(gen_imgs + [want[int(nn_idx[t])] for t in top]), out / f"{args.tag}_nearest_pairs.png", nrow=8)
+            gen_imgs = [
+                torch.from_numpy(np.asarray(Image.open(img_dir / f"{t:06d}.png"))).permute(2, 0, 1).float()
+                / 255
+                for t in top
+            ]
+            save_image(
+                torch.stack(gen_imgs + [want[int(nn_idx[t])] for t in top]),
+                out / f"{args.tag}_nearest_pairs.png",
+                nrow=8,
+            )
 
     # ---------------------------------------------------------------- controllability (no decoding needed)
     if "control" in metrics and Path(args.probe).exists() and attr_names:
         probe = Probe.load(args.probe)
         assert probe.display_names == attr_names, (probe.display_names, attr_names)
         cguid = GuidanceConfig(ig_scale=args.ig_scale, ig_t_min=args.ig_tmin, cfg_scale=args.cfg_scale)
-        csample = (teacher_sampler(model, cguid, args.steps, args.method) if args.kind == "teacher"
-                   else one_step_sampler(model, args.steps))
+        csample = (
+            teacher_sampler(model, cguid, args.steps, args.method)
+            if args.kind == "teacher"
+            else one_step_sampler(model, args.steps)
+        )
         per_attr = {}
         for j, name in enumerate(attr_names):
             accs = {}
             for state, label in ((AttributeTokens.YES, 1), (AttributeTokens.NO, 0)):
+
                 def attrs_fn(i, b, j=j, state=state):
                     a = torch.zeros(b, k, dtype=torch.long)
                     a[:, j] = state
                     return a
+
                 ps = []
-                for z, _ in iterate_latents(csample, args.control_n, 64, k, dev, seed=100 + j, attrs_fn=attrs_fn,
-                                            autocast=prec.autocast):
+                for z, _ in iterate_latents(
+                    csample,
+                    args.control_n,
+                    64,
+                    k,
+                    dev,
+                    seed=100 + j,
+                    attrs_fn=attrs_fn,
+                    autocast=prec.autocast,
+                ):
                     ps.append(probe.probs(z.mean(dim=(-2, -1)))[:, j].cpu())
                 p = torch.cat(ps)
                 accs["yes" if label else "no"] = round(float(((p > 0.5) == bool(label)).float().mean()), 4)
@@ -218,10 +271,19 @@ def main() -> None:
             print(f"[eval] control {name:>14}: yes {accs['yes']:.3f}  no {accs['no']:.3f}", flush=True)
         uncond = torch.cat(pooled) if pooled else None
         result["controllability"] = {
-            "cfg_scale": args.cfg_scale, "per_attribute": per_attr,
+            "cfg_scale": args.cfg_scale,
+            "per_attribute": per_attr,
             "mean_accuracy": round(float(np.mean([(v["yes"] + v["no"]) / 2 for v in per_attr.values()])), 4),
-            "unconditional_positive_rate": ({n: round(float(v), 4) for n, v in zip(attr_names, (probe.probs(uncond.to(dev)) > 0.5).float().mean(0).tolist(), strict=True)}
-                                            if uncond is not None else None),
+            "unconditional_positive_rate": (
+                {
+                    n: round(float(v), 4)
+                    for n, v in zip(
+                        attr_names, (probe.probs(uncond.to(dev)) > 0.5).float().mean(0).tolist(), strict=True
+                    )
+                }
+                if uncond is not None
+                else None
+            ),
         }
 
     # ---------------------------------------------------------------- speed
@@ -245,9 +307,11 @@ def main() -> None:
                     rae.decode(z)
                 torch.cuda.synchronize()
                 t_dec = (time.perf_counter() - t0) / reps
-            speed[f"batch{bs}"] = {"generator_ms_per_img": round(1000 * t_gen / bs, 2),
-                                   "decoder_ms_per_img": round(1000 * t_dec / bs, 2),
-                                   "images_per_s": round(bs / (t_gen + t_dec), 2)}
+            speed[f"batch{bs}"] = {
+                "generator_ms_per_img": round(1000 * t_gen / bs, 2),
+                "decoder_ms_per_img": round(1000 * t_dec / bs, 2),
+                "images_per_s": round(bs / (t_gen + t_dec), 2),
+            }
         result["speed"] = speed
         print(f"[eval] speed: {speed}", flush=True)
 

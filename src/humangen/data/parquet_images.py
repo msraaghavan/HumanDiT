@@ -30,9 +30,7 @@ def decode_image(cell: dict, size: int | None = None) -> np.ndarray:
     return np.asarray(img)
 
 
-def iter_rows(
-    shards: list[Path], columns: list[str], batch_rows: int = 256
-) -> Iterator[dict[str, list]]:
+def iter_rows(shards: list[Path], columns: list[str], batch_rows: int = 256) -> Iterator[dict[str, list]]:
     """Yields column-dict batches, in shard order (deterministic global indexing)."""
     for shard in shards:
         pf = pq.ParquetFile(shard)

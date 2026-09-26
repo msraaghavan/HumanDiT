@@ -23,7 +23,12 @@ EXCLUDED = {
     "Pale_Skin",
 }  # fmt: skip
 # Friendlier names; "No_Beard" is inverted into "Beard".
-RENAME = {"No_Beard": "Beard", "Mouth_Slightly_Open": "Mouth_Open", "Wearing_Hat": "Hat", "Wearing_Lipstick": "Lipstick"}
+RENAME = {
+    "No_Beard": "Beard",
+    "Mouth_Slightly_Open": "Mouth_Open",
+    "Wearing_Hat": "Hat",
+    "Wearing_Lipstick": "Lipstick",
+}
 INVERT = {"No_Beard"}
 
 
@@ -62,7 +67,9 @@ class Probe:
         return swapped
 
     def save(self, path: str | Path) -> None:
-        torch.save({k: getattr(self, k) for k in ("names", "weight", "bias", "mu", "sigma", "lo", "hi")}, path)
+        torch.save(
+            {k: getattr(self, k) for k in ("names", "weight", "bias", "mu", "sigma", "lo", "hi")}, path
+        )
 
     @classmethod
     def load(cls, path: str | Path) -> Probe:
@@ -121,7 +128,10 @@ def calibrate_abstention(
     never tries (it left those attributes with no "present" labels at all).
     """
     k = p_val.shape[1]
-    lo, hi = np.full(k, -1e-6), np.full(k, 1 + 1e-6)  # unreachable unless calibrated (float32 sigmoid can hit 1.0)
+    lo, hi = (
+        np.full(k, -1e-6),
+        np.full(k, 1 + 1e-6),
+    )  # unreachable unless calibrated (float32 sigmoid can hit 1.0)
     for j in range(k):
         p, y = p_val[:, j], y_val[:, j].astype(bool)
         order = np.argsort(-p, kind="stable")  # present: take the top-n scores, n as large as possible
@@ -151,7 +161,11 @@ def evaluate(probe: Probe, x: np.ndarray, y: np.ndarray) -> dict[str, dict[str, 
 
 
 def select_attributes(metrics: dict[str, dict[str, float]], min_bacc: float, max_k: int) -> list[str]:
-    ok = [(m["balanced_acc"], n) for n, m in metrics.items() if n not in EXCLUDED and m["balanced_acc"] >= min_bacc]
+    ok = [
+        (m["balanced_acc"], n)
+        for n, m in metrics.items()
+        if n not in EXCLUDED and m["balanced_acc"] >= min_bacc
+    ]
     return [n for _, n in sorted(ok, reverse=True)[:max_k]]
 
 

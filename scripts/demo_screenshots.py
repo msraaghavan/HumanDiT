@@ -15,7 +15,9 @@ from playwright.sync_api import Page, sync_playwright
 
 
 def radio(page: Page, attribute: str, value: str) -> None:
-    group = page.locator(".block", has=page.get_by_text(attribute, exact=True)).filter(has=page.locator("input[type=radio]"))
+    group = page.locator(".block", has=page.get_by_text(attribute, exact=True)).filter(
+        has=page.locator("input[type=radio]")
+    )
     group.last.get_by_label(value, exact=True).check()
 
 
@@ -42,7 +44,11 @@ def main() -> None:
         page.wait_for_timeout(1500)
         page.evaluate("window.scrollTo(0, 0)")
         page.wait_for_timeout(500)
-        page.screenshot(path=str(out / "demo_generate.jpg"), clip={"x": 0, "y": 0, "width": 1280, "height": 1000}, quality=90)
+        page.screenshot(
+            path=str(out / "demo_generate.jpg"),
+            clip={"x": 0, "y": 0, "width": 1280, "height": 1000},
+            quality=90,
+        )
 
         # Edit: same seed, one attribute flipped (1-step student, instant)
         page.get_by_role("tab", name="Edit").click()
@@ -52,7 +58,9 @@ def main() -> None:
         page.wait_for_timeout(2500)
         page.evaluate("window.scrollTo(0, 0)")
         page.wait_for_timeout(500)
-        page.screenshot(path=str(out / "demo_edit.jpg"), clip={"x": 0, "y": 0, "width": 1280, "height": 620}, quality=90)
+        page.screenshot(
+            path=str(out / "demo_edit.jpg"), clip={"x": 0, "y": 0, "width": 1280, "height": 620}, quality=90
+        )
 
         # Under the hood: teacher trajectory (multi-step, slower on a laptop GPU)
         page.get_by_role("tab", name="Under the hood").click()
@@ -61,7 +69,11 @@ def main() -> None:
         page.wait_for_timeout(1500)
         page.evaluate("window.scrollTo(0, 0)")
         page.wait_for_timeout(500)
-        page.screenshot(path=str(out / "demo_trajectory.jpg"), clip={"x": 0, "y": 0, "width": 1280, "height": 560}, quality=90)
+        page.screenshot(
+            path=str(out / "demo_trajectory.jpg"),
+            clip={"x": 0, "y": 0, "width": 1280, "height": 560},
+            quality=90,
+        )
         browser.close()
     print(f"saved screenshots to {out}")
 

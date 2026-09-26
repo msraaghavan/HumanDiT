@@ -32,7 +32,9 @@ POLAR_EXPRESS = (
 
 def polar_express(g: torch.Tensor, steps: int = 5, eps: float = 1e-7) -> torch.Tensor:
     """Approximate the orthogonal polar factor UVᵀ of g (..., m, n) with quintic iterations."""
-    dtype = torch.bfloat16 if g.is_cuda and torch.cuda.get_device_capability(g.device)[0] >= 8 else torch.float32
+    dtype = (
+        torch.bfloat16 if g.is_cuda and torch.cuda.get_device_capability(g.device)[0] >= 8 else torch.float32
+    )
     x = g.to(dtype)
     transposed = x.shape[-2] > x.shape[-1]
     if transposed:
@@ -75,7 +77,12 @@ class CMuon(Optimizer):
         chunks: int = 1,
     ):
         defaults = dict(
-            lr=lr, momentum=momentum, nesterov=nesterov, weight_decay=weight_decay, ns_steps=ns_steps, chunks=chunks
+            lr=lr,
+            momentum=momentum,
+            nesterov=nesterov,
+            weight_decay=weight_decay,
+            ns_steps=ns_steps,
+            chunks=chunks,
         )
         super().__init__(params, defaults)
         for group in self.param_groups:

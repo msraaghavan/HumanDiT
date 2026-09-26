@@ -169,7 +169,10 @@ def build_cache(
             manifest["done"] = prefix
             man_path.write_text(json.dumps(manifest, indent=2))
             rate = (k - done) / now
-            print(f"[cache] {spec.name}: {k}/{n} ({rate:.1f} img/s, eta {(n - k) / max(rate, 1e-6) / 60:.1f} min)", flush=True)
+            print(
+                f"[cache] {spec.name}: {k}/{n} ({rate:.1f} img/s, eta {(n - k) / max(rate, 1e-6) / 60:.1f} min)",
+                flush=True,
+            )
     for arr in (lat, pooled, labels):
         if arr is not None:
             arr.flush()

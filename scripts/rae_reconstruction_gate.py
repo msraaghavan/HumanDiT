@@ -72,7 +72,10 @@ def main() -> None:
     t_enc = time.perf_counter() - t0
     del enc
     torch.cuda.empty_cache()
-    print(f"encoded -> {tuple(z.shape)} in {t_enc:.1f}s; latent mean {z.mean():.3f} std {z.std():.3f}", flush=True)
+    print(
+        f"encoded -> {tuple(z.shape)} in {t_enc:.1f}s; latent mean {z.mean():.3f} std {z.std():.3f}",
+        flush=True,
+    )
 
     t0 = time.perf_counter()
     dec = RAEDecoder()
@@ -117,9 +120,15 @@ def main() -> None:
             d = out / name
             d.mkdir(exist_ok=True)
             for j, im in enumerate(t):
-                Image.fromarray((im.permute(1, 2, 0).numpy() * 255).round().astype(np.uint8)).save(d / f"{j:06d}.png")
-        metrics["rfid_clean"] = round(fid.compute_fid(str(out / "orig"), str(out / "rec"), mode="clean",
-                                                       num_workers=workers, verbose=False), 4)
+                Image.fromarray((im.permute(1, 2, 0).numpy() * 255).round().astype(np.uint8)).save(
+                    d / f"{j:06d}.png"
+                )
+        metrics["rfid_clean"] = round(
+            fid.compute_fid(
+                str(out / "orig"), str(out / "rec"), mode="clean", num_workers=workers, verbose=False
+            ),
+            4,
+        )
 
     k = min(16, len(x))
     grid = make_grid(torch.cat([x[:k], rec[:k]]), nrow=k, padding=2)

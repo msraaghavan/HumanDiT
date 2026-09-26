@@ -76,7 +76,9 @@ class HumanDiTDH(nn.Module):
         self.attr_embedder = AttributeTokens(dt, cfg.num_attributes, cfg.num_extra_cond_tokens)
         self.num_cond_tokens = cfg.num_time_tokens + self.attr_embedder.n_tokens
 
-        self.trunk = nn.ModuleList(TrunkBlock(dt, cfg.trunk_heads, cfg.mlp_ratio) for _ in range(cfg.trunk_depth))
+        self.trunk = nn.ModuleList(
+            TrunkBlock(dt, cfg.trunk_heads, cfg.mlp_ratio) for _ in range(cfg.trunk_depth)
+        )
         self.s_projector = nn.Linear(dt, dh) if dt != dh else nn.Identity()
         self.head = nn.ModuleList(HeadBlock(dh, cfg.head_heads, cfg.mlp_ratio) for _ in range(cfg.head_depth))
         self.final_layer = FinalLayer(dh, c)
@@ -111,7 +113,9 @@ class HumanDiTDH(nn.Module):
             return checkpoint(fn, *args, use_reentrant=False)
         return fn(*args)
 
-    def forward(self, x: torch.Tensor, t: torch.Tensor, attrs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def forward(
+        self, x: torch.Tensor, t: torch.Tensor, attrs: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         b, c, h, w = x.shape
         n = h * w
         tokens = x.flatten(2).transpose(1, 2)  # (B, N, C)

@@ -65,7 +65,9 @@ class Trainer:
         self.data = LatentDataset(cfg.data.cache, cfg.data.limit, in_memory=cfg.data.in_memory)
         k = self.data.attrs.shape[1]
         self.attr_names = self.data.attr_names
-        mcfg = make_config(cfg.model.preset, num_attributes=max(k, 1), **dict(cfg.model.get("overrides") or {}))
+        mcfg = make_config(
+            cfg.model.preset, num_attributes=max(k, 1), **dict(cfg.model.get("overrides") or {})
+        )
         self.has_attrs = k > 0
         self.model = HumanDiTDH(mcfg).to(self.dev)
         self.model.gradient_checkpointing = bool(cfg.model.grad_checkpointing)
@@ -95,14 +97,25 @@ class Trainer:
             "model_config": self.model.cfg.to_dict(),
             "attr_names": self.attr_names,
             "config": OmegaConf.to_container(self.cfg, resolve=True),
-            "rng": {"torch": torch.get_rng_state(), "cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None},
+            "rng": {
+                "torch": torch.get_rng_state(),
+                "cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+            },
         }
 
     def save(self) -> None:
         _atomic_save(self._state(), self.out / "ckpt" / "latest.pt")
-        meta = {"model_config": json.dumps(self.model.cfg.to_dict()), "attr_names": json.dumps(self.attr_names),
-                "step": str(self.step), "samples_seen": str(self.samples_seen)}
-        save_file({k: v.contiguous() for k, v in self.ema.state_dict().items()}, str(self.out / "ckpt" / "ema.safetensors"), meta)
+        meta = {
+            "model_config": json.dumps(self.model.cfg.to_dict()),
+            "attr_names": json.dumps(self.attr_names),
+            "step": str(self.step),
+            "samples_seen": str(self.samples_seen),
+        }
+        save_file(
+            {k: v.contiguous() for k, v in self.ema.state_dict().items()},
+            str(self.out / "ckpt" / "ema.safetensors"),
+            meta,
+        )
 
     def _resume(self) -> None:
         path = self.out / "ckpt" / "latest.pt"
@@ -161,27 +174,35 @@ class Trainer:
             return
         affordable = int(max(min(hours), 0) * 3600 / step_seconds)
         if affordable < self.total_steps:
-            print(f"[budget] {self.total_steps} steps would take {self.total_steps * step_seconds / 3600:.2f} h; "
-                  f"fitting to {affordable} steps ({min(hours):.2f} h)", flush=True)
+            print(
+                f"[budget] {self.total_steps} steps would take {self.total_steps * step_seconds / 3600:.2f} h; "
+                f"fitting to {affordable} steps ({min(hours):.2f} h)",
+                flush=True,
+            )
             self.total_steps = affordable
         cost = self.total_steps * step_seconds / 3600 * (b.get("usd_per_hour") or 0)
-        print(f"[budget] plan: {self.total_steps} steps x {self.cfg.train.batch_size} = "
-              f"{self.total_steps * self.cfg.train.batch_size / 1e6:.2f}M samples, "
-              f"~{self.total_steps * step_seconds / 3600:.2f} h, ~${cost:.2f}", flush=True)
+        print(
+            f"[budget] plan: {self.total_steps} steps x {self.cfg.train.batch_size} = "
+            f"{self.total_steps * self.cfg.train.batch_size / 1e6:.2f}M samples, "
+            f"~{self.total_steps * step_seconds / 3600:.2f} h, ~${cost:.2f}",
+            flush=True,
+        )
 
     # ------------------------------------------------------------------ loop
     def _loader(self, micro: int):
         cfg = self.cfg
-        return iter(DataLoader(
-            self.data,
-            batch_size=micro,
-            sampler=RandomSampler(self.data, replacement=True, num_samples=10**9),
-            num_workers=cfg.data.num_workers,
-            pin_memory=self.dev.type == "cuda",
-            drop_last=True,
-            persistent_workers=cfg.data.num_workers > 0,
-            prefetch_factor=4 if cfg.data.num_workers > 0 else None,
-        ))
+        return iter(
+            DataLoader(
+                self.data,
+                batch_size=micro,
+                sampler=RandomSampler(self.data, replacement=True, num_samples=10**9),
+                num_workers=cfg.data.num_workers,
+                pin_memory=self.dev.type == "cuda",
+                drop_last=True,
+                persistent_workers=cfg.data.num_workers > 0,
+                prefetch_factor=4 if cfg.data.num_workers > 0 else None,
+            )
+        )
 
     def _micro_step(self, it, micro: int, n_micro: int, tc) -> dict[str, torch.Tensor]:
         """Accumulate gradients over n_micro micro-batches; returns averaged (detached) losses."""
@@ -223,13 +244,19 @@ class Trainer:
                 micro //= 2
                 self.opt.zero_grad(set_to_none=True)
                 torch.cuda.empty_cache()
-                print(f"[train] OOM at micro-batch {micro * 2}; retrying with {micro} x {tc.batch_size // micro}", flush=True)
+                print(
+                    f"[train] OOM at micro-batch {micro * 2}; retrying with {micro} x {tc.batch_size // micro}",
+                    flush=True,
+                )
                 it = self._loader(micro)
                 continue
             except Exception as e:  # torch.compile failures surface on the first call
                 if self.step > 0 or self.fwd is self.model:
                     raise
-                print(f"[train] torch.compile failed ({type(e).__name__}: {str(e)[:200]}); using eager", flush=True)
+                print(
+                    f"[train] torch.compile failed ({type(e).__name__}: {str(e)[:200]}); using eager",
+                    flush=True,
+                )
                 self.fwd = self.model
                 self.opt.zero_grad(set_to_none=True)
                 continue
@@ -252,9 +279,15 @@ class Trainer:
                 elapsed = time.perf_counter() - t_log
                 t_log = time.perf_counter()
                 ips = cfg.log.every * tc.batch_size / elapsed if self.step > 1 else 0.0
-                rec = {"step": self.step, "samples": self.samples_seen, "lr": tc.lr * f, "grad_norm": float(gnorm),
-                       "img_per_s": round(ips, 1), "hours": round((time.perf_counter() - t_start) / 3600, 3),
-                       **{k: v.item() for k, v in losses.items()}}
+                rec = {
+                    "step": self.step,
+                    "samples": self.samples_seen,
+                    "lr": tc.lr * f,
+                    "grad_norm": float(gnorm),
+                    "img_per_s": round(ips, 1),
+                    "hours": round((time.perf_counter() - t_start) / 3600, 3),
+                    **{k: v.item() for k, v in losses.items()},
+                }
                 if self.dev.type == "cuda":
                     rec["mem_gb"] = round(torch.cuda.max_memory_allocated() / 2**30, 2)
                 for k2, v in rec.items():
@@ -262,10 +295,17 @@ class Trainer:
                         self.writer.add_scalar(f"train/{k2}", v, self.step)
                 self.metrics_f.write(json.dumps(rec) + "\n")
                 self.metrics_f.flush()
-                eta = (self.total_steps - self.step) * tc.batch_size / max(ips, 1e-6) / 3600 if ips else float("nan")
-                print(f"[train] step {self.step}/{self.total_steps} loss {rec['loss']:.4f} "
-                      f"(full {rec['loss_full']:.4f} base {rec['loss_base']:.4f}) gnorm {rec['grad_norm']:.2f} "
-                      f"{ips:.1f} img/s eta {eta:.2f} h", flush=True)
+                eta = (
+                    (self.total_steps - self.step) * tc.batch_size / max(ips, 1e-6) / 3600
+                    if ips
+                    else float("nan")
+                )
+                print(
+                    f"[train] step {self.step}/{self.total_steps} loss {rec['loss']:.4f} "
+                    f"(full {rec['loss_full']:.4f} base {rec['loss_base']:.4f}) gnorm {rec['grad_norm']:.2f} "
+                    f"{ips:.1f} img/s eta {eta:.2f} h",
+                    flush=True,
+                )
                 if not math.isfinite(rec["loss"]):
                     raise FloatingPointError("non-finite loss")
 
@@ -281,11 +321,19 @@ class Trainer:
         self.save()
         self.model.eval()
         p = self.sample_grid(f"final_step{self.step:07d}")
-        (self.out / "train_summary.json").write_text(json.dumps({
-            "steps": self.step, "samples_seen": self.samples_seen,
-            "hours": round((time.perf_counter() - t_start) / 3600, 3),
-            "params_m": round(count_params(self.model) / 1e6, 1), "precision": self.prec.name,
-            "gpu": torch.cuda.get_device_name() if torch.cuda.is_available() else "cpu",
-            "platform": platform.platform(), "final_samples": str(p),
-        }, indent=2))
+        (self.out / "train_summary.json").write_text(
+            json.dumps(
+                {
+                    "steps": self.step,
+                    "samples_seen": self.samples_seen,
+                    "hours": round((time.perf_counter() - t_start) / 3600, 3),
+                    "params_m": round(count_params(self.model) / 1e6, 1),
+                    "precision": self.prec.name,
+                    "gpu": torch.cuda.get_device_name() if torch.cuda.is_available() else "cpu",
+                    "platform": platform.platform(),
+                    "final_samples": str(p),
+                },
+                indent=2,
+            )
+        )
         print(f"[train] done: {self.step} steps; final samples -> {p}", flush=True)

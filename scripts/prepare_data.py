@@ -1,10 +1,10 @@
 """Download FFHQ-256 / CelebA from the Hugging Face Hub and cache RAE latents.
 
-    # laptop smoke (first FFHQ shard, 1000 images)
-    uv run python scripts/prepare_data.py ffhq --shards 1 --limit 1000
-    # pod: full FFHQ with flips, and CelebA pooled features + attributes (all splits)
-    python scripts/prepare_data.py ffhq
-    python scripts/prepare_data.py celeba
+# laptop smoke (first FFHQ shard, 1000 images)
+uv run python scripts/prepare_data.py ffhq --shards 1 --limit 1000
+# pod: full FFHQ with flips, and CelebA pooled features + attributes (all splits)
+python scripts/prepare_data.py ffhq
+python scripts/prepare_data.py celeba
 """
 
 from __future__ import annotations
@@ -32,7 +32,9 @@ CELEBA_ATTRS = [
 
 def fetch(repo: str, prefix: str, local_dir: str, max_shards: int | None) -> list[Path]:
     files = sorted(
-        f for f in HfApi().list_repo_files(repo, repo_type="dataset") if f.startswith(prefix) and f.endswith(".parquet")
+        f
+        for f in HfApi().list_repo_files(repo, repo_type="dataset")
+        if f.startswith(prefix) and f.endswith(".parquet")
     )
     files = files[:max_shards] if max_shards else files
     return [Path(hf_hub_download(repo, f, repo_type="dataset", local_dir=local_dir)) for f in files]
@@ -61,9 +63,16 @@ def main() -> None:
         build_cache(spec, rae, args.cache_dir, batch, args.workers, args.limit)
     else:
         for split in ("train", "valid", "test"):
-            shards = fetch(CELEBA_REPO, f"img_align+identity+attr/{split}-", f"{args.data_dir}/celeba", args.shards)
+            shards = fetch(
+                CELEBA_REPO, f"img_align+identity+attr/{split}-", f"{args.data_dir}/celeba", args.shards
+            )
             spec = CacheSpec(
-                f"celeba_{split}", shards, flips=False, store_latents=False, label_columns=CELEBA_ATTRS, center_crop=True
+                f"celeba_{split}",
+                shards,
+                flips=False,
+                store_latents=False,
+                label_columns=CELEBA_ATTRS,
+                center_crop=True,
             )
             build_cache(spec, rae, args.cache_dir, batch, args.workers, args.limit)
 

@@ -38,6 +38,8 @@ def check_watermark(img: Image.Image, device: str = "cpu") -> bool:
 def provenance_pnginfo(details: str) -> PngImagePlugin.PngInfo:
     info = PngImagePlugin.PngInfo()
     info.add_text("AI-generated", "true")
-    info.add_text("Generator", "HumanDiT (RAEv2 + DiT^DH), research demo; synthetic person, not a real individual")
+    info.add_text(
+        "Generator", "HumanDiT (RAEv2 + DiT^DH), research demo; synthetic person, not a real individual"
+    )
     info.add_text("Details", details)
     return info

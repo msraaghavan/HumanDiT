@@ -41,7 +41,11 @@ def test_probe_learns_and_abstains():
 
 
 def test_selection_excludes_subjective():
-    m = {"Attractive": {"balanced_acc": 0.99}, "Eyeglasses": {"balanced_acc": 0.97}, "Smiling": {"balanced_acc": 0.8}}
+    m = {
+        "Attractive": {"balanced_acc": 0.99},
+        "Eyeglasses": {"balanced_acc": 0.97},
+        "Smiling": {"balanced_acc": 0.8},
+    }
     assert select_attributes(m, 0.88, 12) == ["Eyeglasses"]
 
 

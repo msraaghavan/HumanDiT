@@ -56,7 +56,9 @@ def _request(method: str, url: str, body: dict | None = None) -> dict:
     req = urllib.request.Request(url, data=data, method=method)
     req.add_header("Authorization", f"Bearer {_key()}")
     req.add_header("Content-Type", "application/json")
-    req.add_header("User-Agent", "humandit-runpod-ctl/0.1 (+python-urllib)")  # Cloudflare blocks the default UA
+    req.add_header(
+        "User-Agent", "humandit-runpod-ctl/0.1 (+python-urllib)"
+    )  # Cloudflare blocks the default UA
     try:
         with urllib.request.urlopen(req, timeout=60) as r:
             txt = r.read().decode()
@@ -85,8 +87,10 @@ def cmd_gpus(_: argparse.Namespace) -> None:
     for r in rows:
         if r["id"] in CANDIDATE_GPUS:
             stock = (r.get("lowestPrice") or {}).get("stockStatus")
-            print(f"{r['id']:<28} {r['memoryInGb']:>3} GB  community ${r['communityPrice'] or 0:.2f}/h  "
-                  f"secure ${r['securePrice'] or 0:.2f}/h  stock={stock}")
+            print(
+                f"{r['id']:<28} {r['memoryInGb']:>3} GB  community ${r['communityPrice'] or 0:.2f}/h  "
+                f"secure ${r['securePrice'] or 0:.2f}/h  stock={stock}"
+            )
 
 
 def cmd_add_ssh_key(a: argparse.Namespace) -> None:
@@ -98,8 +102,10 @@ def cmd_add_ssh_key(a: argparse.Namespace) -> None:
         return
     sep = "\n\n"  # runpodctl joins account keys with a blank line
     keys = (raw.strip() + sep if raw.strip() else "") + new
-    gql("mutation M($input: UpdateUserSettingsInput) { updateUserSettings(input: $input) { id } }",
-        {"input": {"pubKey": keys}})
+    gql(
+        "mutation M($input: UpdateUserSettingsInput) { updateUserSettings(input: $input) { id } }",
+        {"input": {"pubKey": keys}},
+    )
     n = len([line for line in keys.splitlines() if line.strip()])
     print(f"added {new.split()[-1]} ({n} account keys total; existing keys kept)")
 
@@ -133,7 +139,10 @@ def cmd_status(a: argparse.Namespace) -> None:
         if (ip and "22" in ports) or not a.wait:
             break
         time.sleep(10)
-    info = {k: pod.get(k) for k in ("id", "desiredStatus", "costPerHr", "publicIp", "portMappings", "lastStartedAt")}
+    info = {
+        k: pod.get(k)
+        for k in ("id", "desiredStatus", "costPerHr", "publicIp", "portMappings", "lastStartedAt")
+    }
     print(json.dumps(info, indent=2))
     if pod.get("publicIp") and "22" in (pod.get("portMappings") or {}):
         print(f"ssh -p {pod['portMappings']['22']} root@{pod['publicIp']}")
