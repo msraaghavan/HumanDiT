@@ -25,7 +25,87 @@ with attribute CFG 2.0. Every image is synthetic.*
 ## Results
 
 <!-- RESULTS:START -->
-_Results will appear here after the RunPod run._
+### Generation quality (FFHQ 256×256, 50,000 samples per model)
+
+| Model | NFE | FID (clean) ↓ | FID (legacy TF) ↓ | FD_DINOv2 ↓ | Precision ↑ | Recall ↑ | img/s (4090, bs16) |
+|---|---|---|---|---|---|---|---|
+| Teacher, 50-step ODE + Internal Guidance 1.78 (default) | 50 | 4.60 | 4.59 | 62.4 | 0.787 | 0.683 | 14.5 |
+| W-Flow student, 1 step | 1 | 23.01 | 23.29 | 376.2 | 0.688 | 0.163 | 286.3 |
+| GAN student, adversarial only (1st attempt: **mode collapse**), 1 step | 1 | 206.87 | 204.91 | 2400.6 | 0.532 | 0.000 | 287.1 |
+| *Before:* original DCGAN (bugs fixed), 64×64 | 1 | 177.60 | 172.09 | – | – | – | – |
+
+The DCGAN generates 64×64 images, so the 256 px reference also penalises it for resolution. Scored at its own resolution against all 70k FFHQ faces downsampled to 64×64, its FID (clean) is **45.8**.
+
+### Attribute control (teacher, CFG 2.0; scored by the DINOv3 probe on generated latents)
+
+| Attribute | asked *present* → probe agrees | asked *absent* → probe agrees | base rate (unconditional) |
+|---|---|---|---|
+| Male | 72.7% | 89.1% | 48.2% |
+| Eyeglasses | 88.3% | 85.9% | 27.3% |
+| Hat | 88.3% | 89.1% | 15.9% |
+| Goatee | 95.3% | 84.0% | 24.0% |
+| Sideburns | 91.4% | 84.4% | 21.2% |
+| Beard | 96.1% | 74.6% | 27.5% |
+| Lipstick | 73.0% | 84.4% | 30.2% |
+| Gray Hair | 95.3% | 74.2% | 24.0% |
+| Bangs | 89.5% | 79.7% | 30.1% |
+| Blond Hair | 75.4% | 82.8% | 17.0% |
+| Smiling | 78.5% | 88.3% | 60.8% |
+| Mouth Open | 84.0% | 81.6% | 55.7% |
+
+Mean controllability accuracy: **84.4%**.
+
+The probe over-fires on *generated* latents. For the rarer attributes (hat, goatee, sideburns, gray hair, blond hair) it calls 16%–24% of unconditional samples positive, while FFHQ has 3%–9%. Internal Guidance extrapolation inflates latent statistics: latent std is 1.37 with guidance, vs 1.01 without it and 1.03 for real FFHQ latents (`scripts/latent_stats.py`). So the absolute percentages are approximate; the shift from the base-rate column is the controllable effect.
+
+### Memorisation audit (DINOv3 space, 10,000 samples vs every training face)
+
+- Nearest-training-face cosine similarity: generated median **0.58** (p99 0.79), vs training-to-training median 0.82 (p99 0.97).
+- Fraction of samples closer to a training face than 99.9% of real faces are to each other: **0.000%**.
+- Caveat: generated faces sit *further* from the training set than real faces sit from each other. That is partly the same guidance-induced shift in latent statistics, so this feature space understates similarity. The direct evidence is below: the 8 **most similar** pairs out of 10,000 share pose and studio style, but show different people.
+
+![most similar generated (top) vs training (bottom)](docs/assets/teacher_nearest_pairs.jpg)
+
+### CPU-only deployment (ONNX Runtime, laptop CPU, batch 1)
+
+| Graph | max abs error vs PyTorch | ONNX Runtime ms/face | eager PyTorch ms/face | size |
+|---|---|---|---|---|
+| 1-step generator | 2.3e-05 | 751 | 952 | 726 MB |
+| RAEv2 decoder | 1.0e-05 | 1531 | 1913 | 1667 MB |
+| decoder, weight-only int8, block 32 (MatMulNBits) | PSNR 44.5 dB vs fp32 | 2699 | – | 474 MB |
+
+Dynamic int8 (activations quantised too) broke the ViT-XL decoder in testing (9–11 dB): its activation outliers need per-block weight-only quantisation. Weight-only int8 is 3.5× smaller but not faster on this CPU.
+
+### Invisible watermark on every demo output (TrustMark Q (BCH text payload), 64 generated faces)
+
+| PNG | JPEG q75 | JPEG q50 | 2× down/up-scale | 90% centre crop | PSNR | false positives (real / unmarked) |
+|---|---|---|---|---|---|---|
+| 100% | 100% | 95.3% | 100% | 100% | 43.4 dB | 0% / 0% |
+
+### RAEv2 decoder on faces (reconstruction gate)
+
+PSNR **27.2 dB**, LPIPS **0.033**, rFID **1.30** on 10,000 FFHQ images with the released ImageNet-trained decoder, no face fine-tuning.
+
+### DINOv3 attribute probe (CelebA official test split)
+
+| Attribute | Balanced acc. | AUROC | FFHQ labelled present / absent / abstain |
+|---|---|---|---|
+| Male | 0.990 | 0.999 | 63% / 37% / 0% |
+| Eyeglasses | 0.988 | 0.995 | 22% / 78% / 0% |
+| Hat | 0.978 | 0.995 | 9% / 91% / 0% |
+| Goatee | 0.962 | 0.987 | 5% / 92% / 3% |
+| Sideburns | 0.954 | 0.987 | 7% / 93% / 1% |
+| Beard | 0.948 | 0.988 | 10% / 90% / 0% |
+| Lipstick | 0.942 | 0.987 | 26% / 69% / 5% |
+| Gray Hair | 0.941 | 0.982 | 3% / 97% / 0% |
+| Bangs | 0.935 | 0.983 | 11% / 86% / 4% |
+| Blond Hair | 0.934 | 0.982 | 4% / 94% / 3% |
+| Smiling | 0.923 | 0.979 | 64% / 31% / 5% |
+| Mouth Open | 0.916 | 0.972 | 57% / 35% / 8% |
+
+### Training cost
+
+Teacher: 46,708 steps, 11.96M samples, 10.8 h on NVIDIA GeForce RTX 4090 (182.9M params, bfloat16).
+
 <!-- RESULTS:END -->
 
 ## Live demo (runs on a 4 GB laptop GPU)

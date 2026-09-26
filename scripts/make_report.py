@@ -60,7 +60,9 @@ def build(runs: Path) -> str:
                               f"{(tt.get('guidance') or {}).get('ig_scale', '?')} (tuned)**"),
             ("teacher", f"Teacher, {t0.get('steps', '?')}-step ODE + Internal Guidance "
                         f"{(t0.get('guidance') or {}).get('ig_scale', '?')} (default)"),
-            ("wflow_1step", "W-Flow student, 1 step"), ("gan_1step", "GAN (adversarial post-training) student, 1 step"),
+            ("wflow_1step", "W-Flow student, 1 step"),
+            ("gan_anchor_1step", "GAN student + teacher-pair anchor (2nd attempt), 1 step"),
+            ("gan_1step", "GAN student, adversarial only (1st attempt: **mode collapse**), 1 step"),
             ("legacy_dcgan_64px", "*Before:* original DCGAN (bugs fixed), 64×64")]
     if any(k in ev for k, _ in rows):
         n = next((ev[k]["n"] for k, _ in rows if k in ev), "?")
@@ -180,7 +182,7 @@ def main() -> None:
     start, end = "<!-- RESULTS:START -->", "<!-- RESULTS:END -->"
     if readme and start in text and end in text:
         text = text[: text.index(start) + len(start)] + "\n" + body + "\n" + text[text.index(end):]
-        readme.write_text(text, encoding="utf-8")
+        readme.write_text(text, encoding="utf-8", newline="\n")
     print(body)
 
 
