@@ -22,11 +22,44 @@ def _fmt(v, nd=2) -> str:
     return f"{v:.{nd}f}" if isinstance(v, float) else str(v)
 
 
+def _ablations(d: Path) -> list[str]:
+    """FID-10k sweeps from runs/eval_extra (scripts/pod/run_all.sh EXTRAS=1)."""
+    x = {p.stem: _load(p) for p in sorted(d.glob("*.json"))} if d.is_dir() else {}
+    if not x:
+        return []
+    lines = []
+    ig = sorted((r["guidance"]["ig_scale"], r["fid_clean"]) for k, r in x.items() if k.startswith("teacher_ig"))
+    if ig:
+        best = min(ig, key=lambda v: v[1])
+        lines += ["### Ablation: Internal Guidance scale (teacher, 50 steps, FID-10k clean)", "",
+                  "| IG scale | " + " | ".join(f"{s:.2f}" for s, _ in ig) + " |",
+                  "|---|" + "---|" * len(ig),
+                  "| FID-10k ↓ | " + " | ".join(f"**{f:.2f}**" if (s, f) == best else f"{f:.2f}" for s, f in ig) + " |",
+                  "", "FID-10k is biased upwards relative to FID-50k; compare within this table only.", ""]
+    nfe = []
+    for k, r in x.items():
+        if k.startswith("teacher_ig") and abs(r["guidance"]["ig_scale"] - 1.78) > 1e-6:
+            continue
+        name = ("Teacher (IG 1.78)" if k.startswith("teacher") else
+                "W-Flow student" if k.startswith("wflow") else "GAN student" if k.startswith("gan") else None)
+        if name:
+            nfe.append((name, r["steps"], r["fid_clean"]))
+    if nfe:
+        lines += ["### Quality vs network evaluations (FID-10k clean)", "", "| Model | NFE | FID-10k ↓ |", "|---|---|---|"]
+        lines += [f"| {n} | {s} | {f:.2f} |" for n, s, f in sorted(nfe)]
+        lines.append("")
+    return lines
+
+
 def build(runs: Path) -> str:
     lines = []
     ev = {p.stem: _load(p) for p in sorted((runs / "eval").glob("*.json"))}
     t0 = ev.get("teacher") or {}
-    rows = [("teacher", f"Teacher, {t0.get('steps', '?')}-step ODE + Internal Guidance"),
+    tt = ev.get("teacher_tuned") or {}
+    rows = [("teacher_tuned", f"**Teacher, {tt.get('steps', '?')}-step ODE + Internal Guidance "
+                              f"{(tt.get('guidance') or {}).get('ig_scale', '?')} (tuned)**"),
+            ("teacher", f"Teacher, {t0.get('steps', '?')}-step ODE + Internal Guidance "
+                        f"{(t0.get('guidance') or {}).get('ig_scale', '?')} (default)"),
             ("wflow_1step", "W-Flow student, 1 step"), ("gan_1step", "GAN (adversarial post-training) student, 1 step"),
             ("legacy_dcgan_64px", "*Before:* original DCGAN (bugs fixed), 64×64")]
     if any(k in ev for k, _ in rows):
@@ -57,13 +90,23 @@ def build(runs: Path) -> str:
             for name, v in c["per_attribute"].items():
                 b = base.get(name)
                 lines.append(f"| {name.replace('_', ' ')} | {v['yes']:.1%} | {v['no']:.1%} | {'–' if b is None else f'{b:.1%}'} |")
-            lines += ["", f"Mean controllability accuracy: **{c['mean_accuracy']:.1%}**. The probe over-fires on *generated* "
-                      "latents: it calls 16–24% of unconditional samples hat, goatee or grey-haired, while FFHQ has 3–9%. "
-                      "Internal Guidance extrapolation inflates latent statistics. Measured on the final teacher, latent std "
-                      "is 1.34 at IG 1.78, vs 1.04 without guidance and 1.03 for real FFHQ latents, and pooled-vector norm "
-                      "is 30.1 vs 24.1 and 22.7. So the absolute percentages are approximate; the shift from the base-rate "
-                      "column is the controllable effect. It also suggests the untuned IG scale is costing some FID "
-                      "(tuning it is future work).", ""]
+            lines += ["", f"Mean controllability accuracy: **{c['mean_accuracy']:.1%}**.", ""]
+            cov = (_load(runs / "attributes" / "attributes.json") or {}).get("ffhq_label_coverage", {})
+            rare = [n for n in base if n in cov and cov[n]["present"] < 0.10]
+            stats_ = _load(runs / "eval" / "latent_stats.json")
+            if rare and base:
+                gen_r = [base[n] for n in rare]
+                data_r = [cov[n]["present"] for n in rare]
+                note = (f"The probe over-fires on *generated* latents. For the rarer attributes "
+                        f"({', '.join(n.replace('_', ' ').lower() for n in rare)}) it calls {min(gen_r):.0%}–{max(gen_r):.0%} "
+                        f"of unconditional samples positive, while FFHQ has {min(data_r):.0%}–{max(data_r):.0%}.")
+                ig_key = f"ig_{(t.get('guidance') or {}).get('ig_scale', 1.78):.2f}"
+                if stats_ and ig_key in stats_ and "ig_1.00" in stats_:
+                    note += (f" Internal Guidance extrapolation inflates latent statistics: latent std is "
+                             f"{stats_[ig_key]['std']:.2f} with guidance, vs {stats_['ig_1.00']['std']:.2f} without it "
+                             f"and {stats_['real']['std']:.2f} for real FFHQ latents (`scripts/latent_stats.py`).")
+                note += " So the absolute percentages are approximate; the shift from the base-rate column is the controllable effect."
+                lines += [note, ""]
         if t.get("memorization"):
             m = t["memorization"]
             lines += [f"### Memorisation audit (DINOv3 space, {min(t['n'], 10000):,} samples vs every training face)", "",
@@ -74,10 +117,11 @@ def build(runs: Path) -> str:
                       f"**{m['frac_gen_above_threshold']:.3%}**.",
                       "- Caveat: generated faces sit *further* from the training set than real faces sit from each other. That is "
                       "partly the same guidance-induced shift in latent statistics, so this feature space understates similarity. "
-                      "The direct evidence is below: the 8 **most similar** pairs out of 10,000 share pose and studio style, but "
-                      "show different people.", ""]
+                      f"The direct evidence is below: the 8 **most similar** pairs out of {min(t['n'], 10000):,} share pose and "
+                      "studio style, but show different people.", ""]
             if Path("docs/assets/teacher_nearest_pairs.jpg").exists():
                 lines += ["![most similar generated (top) vs training (bottom)](docs/assets/teacher_nearest_pairs.jpg)", ""]
+    lines += _ablations(runs / "eval_extra")
     gate = _load(runs / "rae_gate" / "metrics.json")
     if gate:
         lines += ["### RAEv2 decoder on faces (reconstruction gate)", "",
