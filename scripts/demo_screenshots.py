@@ -1,0 +1,70 @@
+"""Drive the running Gradio demo in a real browser and save README screenshots.
+
+    uv run python app/gradio_app.py ...          # in another terminal (http://localhost:7860)
+    uv run python scripts/demo_screenshots.py    # uses the installed Microsoft Edge (channel msedge)
+
+Writes docs/assets/demo_generate.jpg, demo_edit.jpg, demo_trajectory.jpg.
+"""
+
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+
+from playwright.sync_api import Page, sync_playwright
+
+
+def radio(page: Page, attribute: str, value: str) -> None:
+    group = page.locator(".block", has=page.get_by_text(attribute, exact=True)).filter(has=page.locator("input[type=radio]"))
+    group.last.get_by_label(value, exact=True).check()
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--url", default="http://localhost:7860")
+    ap.add_argument("--out", default="docs/assets")
+    ap.add_argument("--channel", default="msedge")
+    a = ap.parse_args()
+    out = Path(a.out)
+    out.mkdir(parents=True, exist_ok=True)
+    with sync_playwright() as p:
+        browser = p.chromium.launch(channel=a.channel)
+        page = browser.new_page(viewport={"width": 1280, "height": 1100}, device_scale_factor=1)
+        page.goto(a.url, wait_until="networkidle")
+
+        # Generate: 1-step student, composed attributes, 8 faces
+        page.get_by_role("spinbutton", name="number input for Faces").fill("8")
+        page.keyboard.press("Enter")
+        for attr, val in (("Male", "no"), ("Eyeglasses", "yes"), ("Blond Hair", "yes"), ("Smiling", "yes")):
+            radio(page, attr, val)
+        page.get_by_role("button", name="Generate", exact=True).last.click()
+        page.get_by_text("ms/face").wait_for(timeout=180_000)
+        page.wait_for_timeout(1500)
+        page.evaluate("window.scrollTo(0, 0)")
+        page.wait_for_timeout(500)
+        page.screenshot(path=str(out / "demo_generate.jpg"), clip={"x": 0, "y": 0, "width": 1280, "height": 1000}, quality=90)
+
+        # Edit: same seed, one attribute flipped (1-step student, instant)
+        page.get_by_role("tab", name="Edit").click()
+        page.get_by_label("1-step (real-time student)").last.check()
+        page.get_by_role("button", name="Show absent vs present").click()
+        page.locator("[role=tabpanel]:visible img").nth(1).wait_for(timeout=180_000)
+        page.wait_for_timeout(2500)
+        page.evaluate("window.scrollTo(0, 0)")
+        page.wait_for_timeout(500)
+        page.screenshot(path=str(out / "demo_edit.jpg"), clip={"x": 0, "y": 0, "width": 1280, "height": 620}, quality=90)
+
+        # Under the hood: teacher trajectory (multi-step, slower on a laptop GPU)
+        page.get_by_role("tab", name="Under the hood").click()
+        page.get_by_role("button", name="Show trajectory").click()
+        page.get_by_text("step 50").wait_for(timeout=300_000)
+        page.wait_for_timeout(1500)
+        page.evaluate("window.scrollTo(0, 0)")
+        page.wait_for_timeout(500)
+        page.screenshot(path=str(out / "demo_trajectory.jpg"), clip={"x": 0, "y": 0, "width": 1280, "height": 560}, quality=90)
+        browser.close()
+    print(f"saved screenshots to {out}")
+
+
+if __name__ == "__main__":
+    main()

@@ -91,13 +91,14 @@ class Engine:
         return (out[0].float(), out[1]) if trajectory else (out.float(), [])
 
     @torch.no_grad()
-    def decode(self, z: torch.Tensor) -> list[Image.Image]:
+    def decode(self, z: torch.Tensor, mark: bool = True) -> list[Image.Image]:
         if self.ort_dec is not None:
             imgs = torch.from_numpy(self.ort_dec.run(None, {"latent": z.float().cpu().numpy()})[0])
         else:
             imgs = self.rae.decode(z)
         arr = (imgs.permute(0, 2, 3, 1).cpu().numpy() * 255).round().astype(np.uint8)
-        return [add_watermark(Image.fromarray(a)) for a in arr]
+        imgs = [Image.fromarray(a) for a in arr]
+        return [add_watermark(im) for im in imgs] if mark else imgs
 
     def describe(self, z: torch.Tensor) -> list[dict]:
         if self.probe is None:
@@ -155,10 +156,13 @@ def build_ui(e: Engine) -> gr.Blocks:
                 t0 = time.perf_counter()
                 z, _ = e.sample(noise, a, mode_, steps_, cfg_, ig_)
                 t1 = time.perf_counter()
-                imgs = e.decode(z)
+                imgs = e.decode(z, mark=False)
                 t2 = time.perf_counter()
+                imgs = [add_watermark(im) for im in imgs]
+                t3 = time.perf_counter()
                 msg = (f"**{mode_}** · generator {1000 * (t1 - t0) / n:.0f} ms/face · decoder "
-                       f"{1000 * (t2 - t1) / n:.0f} ms/face · total {t2 - t0:.2f} s for {n}")
+                       f"{1000 * (t2 - t1) / n:.0f} ms/face · watermark (CPU) {1000 * (t3 - t2) / n:.0f} ms/face · "
+                       f"total {t3 - t0:.2f} s for {n}")
                 return imgs, msg, e.describe(z)
 
             go.click(generate, [mode, seed, count, steps, cfg, ig, *attr_inputs], [gallery, timing, probe_out])

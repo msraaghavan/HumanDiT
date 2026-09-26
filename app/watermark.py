@@ -22,7 +22,7 @@ MARK = "HumanDiT"
 def _tm(device: str = "cpu"):
     from trustmark import TrustMark
 
-    return TrustMark(verbose=False, model_type="Q", device=device)
+    return TrustMark(verbose=False, model_type="Q", device=device, loadRemover=False)
 
 
 def add_watermark(img: Image.Image, device: str = "cpu") -> Image.Image:

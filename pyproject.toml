@@ -36,7 +36,12 @@ demo = [
 ]
 
 [dependency-groups]
-dev = ["pytest>=9", "ruff>=0.15", "pre-commit>=4"]
+dev = [
+    "pytest>=9",
+    "ruff>=0.15",
+    "pre-commit>=4",
+    "playwright>=1.55",
+]
 
 [build-system]
 requires = ["uv_build>=0.12,<0.13"]
