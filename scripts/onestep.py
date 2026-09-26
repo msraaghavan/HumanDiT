@@ -91,6 +91,9 @@ def main() -> None:
     teacher, attr_names, meta = load_generator(args.teacher, dev)
     k = teacher.cfg.num_attributes
     student = copy.deepcopy(teacher).train().requires_grad_(True)
+    # Eager mode (no torch.compile) plus teacher, EMA and AdamW states: batch-128 activations of the 183M model
+    # do not fit in 24 GB (OOM on the 4090), so recompute them in the backward pass.
+    student.gradient_checkpointing = True
     ema = copy.deepcopy(teacher).eval()
     ds = LatentDataset(args.cache, args.limit)
     attrs_np = ds.attrs if ds.attrs.shape[1] else np.zeros((len(ds), k), dtype=np.int8)
@@ -172,7 +175,9 @@ def main() -> None:
             log.write(json.dumps(rec) + "\n")
             log.flush()
             main_loss = info.get("loss", info.get("loss_g"))
-            print(f"[{args.method}] step {step} {rec['minutes']} min loss {main_loss:.4f} gnorm {float(gn):.2f}", flush=True)
+            mem = f" peak {torch.cuda.max_memory_allocated() / 2**30:.1f} GiB" if dev.type == "cuda" else ""
+            print(f"[{args.method}] step {step} {rec['minutes']} min loss {main_loss:.4f} gnorm {float(gn):.2f}{mem}",
+                  flush=True)
             if not math.isfinite(main_loss):
                 raise FloatingPointError("non-finite loss")
         if step % args.sample_every == 0:

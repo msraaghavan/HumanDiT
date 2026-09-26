@@ -13,6 +13,7 @@ import copy
 import torch
 import torch.nn.functional as F
 from torch import nn
+from torch.utils.checkpoint import checkpoint
 
 from humangen.diffusion.transport import Transport
 from humangen.models.dit_dh import HumanDiTDH
@@ -44,7 +45,12 @@ class TrunkDiscriminator(nn.Module):
         seq = torch.cat([self.s_embedder(tokens), t_tokens, self.attr_embedder(attrs)], dim=1)
         out, hi = 0.0, 0
         for i, blk in enumerate(self.trunk):
-            seq = blk(seq, self.rope)
+            # G step: gradients flow through the frozen trunk into the student, so recompute its activations
+            # instead of storing them (a 24 GB GPU cannot hold both models' activations at batch 64 in eager mode).
+            if torch.is_grad_enabled() and seq.requires_grad:
+                seq = checkpoint(blk, seq, self.rope, use_reentrant=False)
+            else:
+                seq = blk(seq, self.rope)
             if i + 1 in self.layers:
                 out = out + self.heads[hi](seq[:, :n]).mean(dim=(1, 2))
                 hi += 1
