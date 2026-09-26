@@ -31,6 +31,8 @@ from humangen.rae import RAE
 from humangen.utils.device import get_precision
 
 STATE = {"any": AttributeTokens.NULL, "yes": AttributeTokens.YES, "no": AttributeTokens.NO}
+# Internal Guidance scale for the teacher: the FID-10k sweep winner (1.55 -> FID-50k 3.78 vs 4.60 at the 1.78 default).
+IG_TUNED = 1.55
 
 
 class Engine:
@@ -155,7 +157,7 @@ def build_ui(e: Engine) -> gr.Blocks:
                     count = gr.Slider(1, 8, value=4, step=1, label="Faces")
                     steps = gr.Slider(4, 100, value=50, step=1, label="Teacher steps")
                     cfg = gr.Slider(1.0, 6.0, value=2.5, step=0.1, label="Attribute guidance (CFG)")
-                    ig = gr.Slider(1.0, 3.0, value=1.78, step=0.02, label="Internal guidance")
+                    ig = gr.Slider(1.0, 3.0, value=IG_TUNED, step=0.01, label="Internal guidance")
                     go = gr.Button("Generate", variant="primary")
                 with gr.Column(scale=2):
                     gallery = gr.Gallery(label="Synthetic faces", columns=4, height=560, format="png")
@@ -206,7 +208,7 @@ def build_ui(e: Engine) -> gr.Blocks:
                 noise = e.noise(seed_, 2)[:1].repeat(2, 1, 1, 1)
                 a = torch.zeros(2, e.k, dtype=torch.long, device=e.dev)
                 a[0, j], a[1, j] = AttributeTokens.NO, AttributeTokens.YES
-                z, _ = e.sample(noise, a, mode_, 50, 3.0, 1.78)
+                z, _ = e.sample(noise, a, mode_, 50, 3.0, IG_TUNED)
                 no, yes = e.decode(z)
                 return no, yes
 
@@ -231,7 +233,7 @@ def build_ui(e: Engine) -> gr.Blocks:
                 for i in range(0, len(ts), 8):
                     t = ts[i : i + 8].view(-1, 1, 1, 1)
                     z = (torch.sin((1 - t) * omega) * za + torch.sin(t * omega) * zb) / torch.sin(omega)
-                    lat, _ = e.sample(z, e.attrs([], len(t)), mode_, 30, 1.0, 1.78)
+                    lat, _ = e.sample(z, e.attrs([], len(t)), mode_, 30, 1.0, IG_TUNED)
                     frames += [np.asarray(im) for im in e.decode(lat)]
                 path = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False).name  # noqa: SIM115
                 iio.imwrite(path, np.stack(frames + frames[::-1]), fps=12, codec="libx264")
@@ -278,7 +280,7 @@ def build_ui(e: Engine) -> gr.Blocks:
             def trajectory(seed_):
                 if e.teacher is None:
                     return []
-                _, traj = e.sample(e.noise(seed_), e.attrs([]), "Teacher", 50, 1.0, 1.78, trajectory=True)
+                _, traj = e.sample(e.noise(seed_), e.attrs([]), "Teacher", 50, 1.0, IG_TUNED, trajectory=True)
                 pick = [0, 5, 10, 20, 35, 49]
                 return [
                     (img, f"step {i + 1}")

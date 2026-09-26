@@ -69,6 +69,15 @@ def _ablations(d: Path) -> list[str]:
         ]
         lines += [f"| {n} | {s} | {f:.2f} |" for n, s, f in sorted(nfe)]
         lines.append("")
+        teach = sorted((s, f) for n, s, f in nfe if n.startswith("Teacher"))
+        best = min(teach, key=lambda v: v[1]) if teach else None
+        if best and teach[-1][0] > best[0]:
+            lines += [
+                f"With IG 1.78, {best[0]} steps score better than {teach[-1][0]} ({best[1]:.2f} vs {teach[-1][1]:.2f}). "
+                "Together with the guidance sweep, this suggests 1.78 over-guides; the step count at the tuned scale "
+                "was not swept.",
+                "",
+            ]
     return lines
 
 
@@ -117,6 +126,17 @@ def build(runs: Path) -> str:
                 f"The DCGAN generates 64×64 images, so the 256 px reference also penalises it for resolution. "
                 f"Scored at its own resolution against all 70k FFHQ faces downsampled to 64×64, its FID "
                 f"(clean) is **{legacy['fid_clean_64px_vs_ffhq64']:.1f}**.",
+                "",
+            ]
+        if tt and t0:
+            ig_t, ig_0 = (
+                (tt.get("guidance") or {}).get("ig_scale"),
+                (t0.get("guidance") or {}).get("ig_scale"),
+            )
+            lines += [
+                f"The tuned row uses the guidance scale that won the FID-10k sweep below ({ig_t}), re-scored on "
+                f"{tt.get('n', 0):,} samples. Only the guidance scale differs, so its speed equals the default's. "
+                f"Attribute control and latent statistics below were measured at the default {ig_0}, before the sweep.",
                 "",
             ]
         t = ev.get("teacher") or {}
@@ -169,8 +189,16 @@ def build(runs: Path) -> str:
                 "partly the same guidance-induced shift in latent statistics, so this feature space understates similarity. "
                 f"The direct evidence is below: the 8 **most similar** pairs out of {min(t['n'], 10000):,} share pose and "
                 "studio style, but show different people.",
-                "",
             ]
+            mt = tt.get("memorization")
+            if mt:
+                lines.append(
+                    f"- At the tuned guidance scale ({(tt.get('guidance') or {}).get('ig_scale')}), the generated median "
+                    f"is {mt['gen_nn_sim_p50']:.2f} (p99 {mt['gen_nn_sim_p99']:.2f}), closer to the training-set "
+                    f"statistics as the caveat predicts, and {mt['frac_gen_above_threshold']:.3%} of samples exceed "
+                    f"the threshold."
+                )
+            lines.append("")
             if Path("docs/assets/teacher_nearest_pairs.jpg").exists():
                 lines += [
                     "![most similar generated (top) vs training (bottom)](docs/assets/teacher_nearest_pairs.jpg)",

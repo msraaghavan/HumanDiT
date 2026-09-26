@@ -29,13 +29,18 @@ The 12 attributes are Male, Eyeglasses, Hat, Goatee, Sideburns, Beard, Lipstick,
 Smiling and Mouth Open. Bald, Mustache and Wearing Necktie passed the CelebA accuracy bar but were dropped: fewer than
 0.5% of FFHQ faces reach the 90%-precision threshold for them, so the generator could not learn them.
 
-## Measured performance (teacher, 50-step sampling, Internal Guidance 1.78; details in the README)
-- FID-50k vs FFHQ-256: **4.60** (clean) / 4.59 (legacy TF). FD_DINOv2 62.4, precision 0.787, recall 0.683.
-- Attribute control: 84.4% mean agreement of the DINOv3 probe with the requested attribute state. The probe
-  over-fires on generated latents, because guidance inflates latent statistics (std 1.37 vs 1.03 for real data;
-  `scripts/latent_stats.py`), so treat absolute rates as approximate.
-- Memorisation: 0 of 10,000 samples exceeded the 99.9th-percentile training-to-training similarity. The most similar
-  pairs show different people.
+## Measured performance (teacher, 50-step sampling; details in the README)
+- FID-50k vs FFHQ-256: **3.78** (clean) / 3.87 (legacy TF) at the tuned Internal Guidance scale 1.55, with
+  FD_DINOv2 49.0, precision 0.819 and recall 0.680. The demo uses 1.55. At the pre-training default 1.78: 4.60 / 4.59,
+  FD_DINOv2 62.4. The scale was tuned on FID-10k against the same reference, so 3.78 is not a held-out estimate.
+- Attribute control (measured at IG 1.78): 84.4% mean agreement of the DINOv3 probe with the requested attribute
+  state. The probe over-fires on generated latents, because guidance inflates latent statistics (std 1.37 vs 1.03
+  for real data; `scripts/latent_stats.py`), so treat absolute rates as approximate.
+- Memorisation: 0 of 10,000 samples exceeded the 99.9th-percentile training-to-training similarity at either
+  guidance scale. The most similar pairs show different people.
+- One-step students: W-Flow reaches FID-50k 23.0 with recall 0.163 (vs 0.683 for the teacher). It is 20× faster but
+  far less diverse, and it is the demo's real-time mode. The adversarial student collapsed (FID 207, recall 0). An
+  anchored retry fixed the collapse (FID 33.1, recall 0.155) but still trails W-Flow, so it is not used in the demo.
 
 ## Known biases and limitations
 - FFHQ over-represents some age groups, ethnicities and photographic styles. Under-represented groups are likely to

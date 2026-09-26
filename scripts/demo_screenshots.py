@@ -34,13 +34,20 @@ def main() -> None:
         page = browser.new_page(viewport={"width": 1280, "height": 1100}, device_scale_factor=1)
         page.goto(a.url, wait_until="networkidle")
 
+        # Warm-up: the first call loads TrustMark and the CUDA kernels; the screenshot should show steady state
+        faces = page.get_by_role("spinbutton", name="number input for Faces")
+        faces.fill("1")
+        page.keyboard.press("Enter")
+        page.get_by_role("button", name="Generate", exact=True).last.click()
+        page.get_by_text("for 1").wait_for(timeout=180_000)
+
         # Generate: 1-step student, composed attributes, 8 faces
-        page.get_by_role("spinbutton", name="number input for Faces").fill("8")
+        faces.fill("8")
         page.keyboard.press("Enter")
         for attr, val in (("Male", "no"), ("Eyeglasses", "yes"), ("Blond Hair", "yes"), ("Smiling", "yes")):
             radio(page, attr, val)
         page.get_by_role("button", name="Generate", exact=True).last.click()
-        page.get_by_text("ms/face").wait_for(timeout=180_000)
+        page.get_by_text("for 8").wait_for(timeout=180_000)
         page.wait_for_timeout(1500)
         page.evaluate("window.scrollTo(0, 0)")
         page.wait_for_timeout(500)
