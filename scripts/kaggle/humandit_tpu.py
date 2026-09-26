@@ -102,8 +102,11 @@ def setup() -> None:
     }.items():
         (REPO / rel).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(src, REPO / rel)
+    # pin the image's torch / torchvision / torch_xla: an unpinned dependency upgrade would break torch_xla
     sh(
-        "pip install -q clean-fid omegaconf safetensors huggingface_hub pyarrow scikit-learn imageio 2>&1 | tail -2",
+        "pip freeze | grep -iE '^(torch|torchvision|torch[-_]xla)==' > /tmp/pins.txt; cat /tmp/pins.txt; "
+        "pip install -q -c /tmp/pins.txt clean-fid omegaconf safetensors huggingface_hub pyarrow scikit-learn "
+        "imageio tensorboard 2>&1 | tail -2",
         check=False,
     )
     sh(
