@@ -20,6 +20,7 @@ bug costs minutes of TPU quota, not hours. Jobs:
 from __future__ import annotations
 
 import glob
+import hashlib
 import json
 import os
 import shutil
@@ -252,22 +253,49 @@ def run_check() -> bool:
     return ok
 
 
+PART = 40 * 2**20  # the Colab transfer API sends a file as one base64 request; ~50 MB+ requests are refused
+
+
+def split(src: Path, dl: Path, manifest: dict) -> None:
+    """src -> dl/<name>.partNN (PART bytes each), recorded with its sha256 for reassembly."""
+    h, parts = hashlib.sha256(), []
+    with open(src, "rb") as f:
+        while chunk := f.read(PART):
+            h.update(chunk)
+            parts.append(f"{src.name}.part{len(parts):02d}")
+            (dl / parts[-1]).write_bytes(chunk)
+    manifest[src.name] = {"sha256": h.hexdigest(), "bytes": src.stat().st_size, "parts": parts}
+
+
 def pack() -> None:
-    """Colab: one archive of logs, status and results for a single `colab download`. Weights and the platform-check
-    arrays stay out (the transfer API caps a file at ~50 MB); those are downloaded file by file."""
+    """Colab: results + logs + platform-check arrays as one archive, and the (real-run) GAN student weights, both
+    split into PART-sized pieces under /content/dl with a MANIFEST.json (sha256) -- see scratchpad watchdog pull."""
     if KAGGLE:
         return
-    dst = OUT.parent / "humandit_results.tar.gz"
-    with tarfile.open(dst, "w:gz") as t:
-        t.add(
-            OUT,
-            arcname=OUT.name,
-            filter=lambda ti: None if ti.name.endswith((".safetensors", ".npy")) else ti,
-        )
-    print(f"[driver] packed {dst} ({dst.stat().st_size / 1e6:.1f} MB)", flush=True)
+    dl = OUT.parent / "dl"
+    shutil.rmtree(dl, ignore_errors=True)
+    dl.mkdir()
+    tgz, manifest = OUT.parent / "humandit_results.tar.gz", {}
+    skip = (
+        ".safetensors",
+        "ffhq256_dinov2_real.npz",
+    )  # weights travel separately; the npz is one of our inputs
+    with tarfile.open(tgz, "w:gz") as t:
+        t.add(OUT, arcname=OUT.name, filter=lambda ti: None if ti.name.endswith(skip) else ti)
+    split(tgz, dl, manifest)
+    tgz.unlink()
+    student = OUT / "results" / "runs" / "student_gan_fixed" / "student.safetensors"
+    if student.exists():
+        split(student, dl, manifest)
+    (dl / "MANIFEST.json").write_text(json.dumps(manifest, indent=2))
+    sizes = ", ".join(f"{k} ({v['bytes'] / 1e6:.1f} MB)" for k, v in manifest.items())
+    print(f"[driver] packed {sizes}", flush=True)
 
 
 def main() -> None:
+    if STAGES == ["pack"]:  # re-pack an earlier run's outputs only
+        pack()
+        return
     setup()
     print(f"[driver] {'GPU' if GPU else 'TPU'}; stages {STAGES}", flush=True)
     try:
@@ -284,9 +312,9 @@ def main() -> None:
             run_stage(toy=False)
         print(json.dumps(STATUS, indent=2), flush=True)
     finally:
+        pack()
         STATUS["driver"] = "done"
         save_status()
-        pack()
 
 
 if __name__ == "__main__":
