@@ -257,7 +257,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--teacher", default="runs/teacher_b/ckpt/ema.safetensors")
     ap.add_argument("--student", default="runs/student_wflow/student.safetensors")
-    ap.add_argument("--probe", default="cache/attribute_probe.pt")
+    ap.add_argument("--probe", default="runs/attributes/attribute_probe.pt")
     ap.add_argument("--eval-dir", default="runs/eval")
     ap.add_argument("--onnx-dir", default="onnx", help="ONNX graphs used when no CUDA GPU is available")
     ap.add_argument("--port", type=int, default=7860)
