@@ -30,7 +30,7 @@ import time
 from pathlib import Path
 
 T0 = time.time()
-KAGGLE = Path("/kaggle/input").exists()
+KAGGLE = "COLAB_RELEASE_TAG" not in os.environ and Path("/kaggle/input").exists()  # Colab also has /kaggle/*
 GPU = shutil.which("nvidia-smi") is not None  # the same jobs also run on a CUDA GPU (no --tpu, no PJRT)
 # which stages to run: toy (rehearsal), check (platform agreement + speed, scripts/platform_check.py), real
 STAGES = os.environ.get("HUMANDIT_STAGES", "toy,real").split(",")
