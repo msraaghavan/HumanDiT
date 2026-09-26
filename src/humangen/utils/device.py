@@ -3,6 +3,9 @@
 Measured on the GTX 1650 Ti (sm_75): fp16 GEMM is 4x *slower* than fp32 and bf16 is emulated,
 so pre-Ampere GPUs run in fp32. Ampere+ (sm >= 80) uses bf16 autocast with TF32 matmuls.
 TPUs (torch_xla, opted in with PJRT_DEVICE=TPU or HUMANGEN_DEVICE=xla) use bf16 autocast.
+
+TPU support is UNVERIFIED: its first real run (Colab v6e-1) hit two known bugs that were deliberately left unfixed
+(SDPA input dtypes under XLA autocast; torch_xla.launch on a single chip) -- docs/compute_platforms.md, section 3.
 """
 
 from __future__ import annotations

@@ -196,13 +196,24 @@ flowchart LR
   [write-up with figures](docs/laptop_smoke_test.md).
 - **Budget-aware training:** the trainer measures its own step time and fits the run to a dollar budget.
   Gradient accumulation backs off automatically on OOM, and every stage of the RunPod pipeline is idempotent and resumable.
+- **Measured hardware bake-off before the follow-up run.** A Colab TPU v6e-1, A100 and G4 (RTX PRO 6000) each ran
+  every follow-up job at toy size. Each also ran [`scripts/platform_check.py`](scripts/platform_check.py) against an
+  fp32 reference, on the same seeds and the same CPU-drawn noise:
+  - **The GPUs give identical results.** In fp32 they agree to 85 dB, and under the bf16 production policy both sit
+    the same distance from the reference.
+  - **The A100 is the cheapest per result.** The G4 is 1.3 to 1.6 times faster but 1.68 times the price.
+  - **The TPU failed its rehearsal on two torch_xla porting bugs**, documented and deliberately left unfixed.
+
+  The follow-ups therefore ran on an A100, under a laptop-side spend watchdog. Details:
+  [docs/compute_platforms.md](docs/compute_platforms.md).
 - **W-Flow adaptation:** the paper computes OT drift in MAE feature spaces. Here the RAEv2 latent *is* a DINOv3
   representation, so the multi-scale drift (tokens, 2×2 and 4×4 pools, global statistics) runs directly on
   generator outputs with no extra feature network. The loss is ported from the official MIT implementation.
 
 ## What broke, and how I fixed it
 
-Everything below happened during this project's single cloud run. Each fix is in the code and measured.
+Everything below happened during this project's cloud runs: the main run on a RunPod 4090, then the follow-ups
+(Kaggle, then Colab). Each fix is in the code and measured, except where a row says otherwise.
 
 | Problem | How it showed up | Fix |
 |---|---|---|
@@ -215,6 +226,9 @@ Everything below happened during this project's single cloud run. Each fix is in
 | **…and a code review later found why** | `renoise` clamped the teacher's timestep distribution (median t = 0.89) at 0.7, so ~89% of the discriminator's inputs were at exactly t = 0.7, i.e. 70% noise. A D that almost never sees clean latents cannot judge detail or diversity. Both GAN runs above used this bug. | Fixed: uniform t on (0, 0.7], with a regression test. The fixed GAN has **not** been retrained yet, so the W-Flow vs GAN comparison above is against a handicapped GAN. |
 | **An evaluation precision leak (found in code review)** | `iterate_latents` yielded from inside its `autocast` block, and autocast is thread-global. So on the 4090, generated images were decoded and featurised in bf16, while the real FFHQ features were fp32. | Fixed, with a regression test. Measured on the same 2,000 latents (`scripts/autocast_leak_check.py`): FD_DINOv2 moves by 0.03%, precision/recall by ≤ 0.005 (sampling noise) and decoded images differ by 53 dB PSNR, so every reported number stands. |
 | **The last results were stranded on a stopped pod** | The budget deadman stopped the pod at the spending cap, as designed, before the ablation stage's results were pulled. My laptop-side watcher had matched its own echoed command, so it never triggered the pull. A Community pod's disk lives on its host, and that GPU was re-rented, so the pod couldn't restart. | Recovered by resuming the pod as a GPU-less *transfer* pod, then verified file-for-file against the pod. Lesson for next time: pull after every stage, or use a network volume that isn't tied to one host. |
+| **The Kaggle TPU job never started** | It sat `QUEUED` for over an hour on a TPU v5e-8, and Kaggle shows no queue position. The account was verified, with no TPU hours used. "Toggling" the accelerator did not reset the reservation. | Cancelled and moved to Colab, where VMs start in seconds. |
+| **The TPU port failed on its first real TPU** | The torch_xla support had been tested only on CPU and CUDA. On a Colab v6e-1, 5 of 8 rehearsal jobs failed. First, attention got float32 q/k with bf16 v: CUDA autocast casts SDPA inputs, XLA's does not (`models/layers.py:68`). Second, `torch_xla.launch` expected 4 chips on the 1-chip VM. | **Not fixed, by choice.** The A100 was cheaper per result and keeps numbers comparable with the 4090 runs, so the TPU path is marked unverified. Bugs and likely fixes: [docs/compute_platforms.md](docs/compute_platforms.md#3-the-tpu-torch_xla-port-two-known-bugs-not-fixed). |
+| **Colab refused large transfers** | `colab upload` / `download` send a file as one base64 request, and ~50 MB+ is refused. Colab images also ship `/kaggle/input`, which fooled the driver's platform check. | 40 MB parts with a sha256 manifest, reassembled and verified at both ends. Colab is now detected by `COLAB_RELEASE_TAG` (`scripts/colab/`). |
 | **The watermark didn't work** | `invisible-watermark` DWT-DCT recovered 0 of 6 marks on 256 px faces and changed pixels by up to 179 levels. | Replaced it with TrustMark: 100% recovery after PNG, JPEG q75, rescaling and cropping, 43 dB PSNR, and 0 false positives (`scripts/watermark_eval.py`). |
 
 | EMA, 1.0M samples | raw weights, 0.72M samples |
@@ -234,6 +248,9 @@ DRY_RUN=1 EXTRAS=1 bash scripts/pod/run_all.sh          # the whole cloud pipeli
 uv run python scripts/pod_ops.py launch --budget 5.5 --auto-reject
 uv run python scripts/pod_ops.py logs
 uv run python scripts/pod_ops.py pull && uv run python scripts/pod_ops.py mark-pulled
+
+# the follow-ups (fixed GAN, tuned-guidance control and step sweep) on a Colab A100: see scripts/colab/README.md
+uv run python scripts/colab/stage_inputs.py             # then, from WSL/Linux: colab new, upload_inputs.sh, driver.py
 
 uv run python scripts/make_report.py                    # rebuilds the results section from runs/**/*.json
 uv run python legacy/dcgan.py train && uv run --extra eval python legacy/dcgan.py fid    # "before" baseline
@@ -273,6 +290,13 @@ its "latent consistency" loss penalised output differences between nearby latent
 - The default guidance scale (1.78, chosen before training) over-guides: it inflates latent statistics by about a
   third and costs FID (4.60 vs 3.78 at 1.55). The attribute-control numbers were measured at 1.78, so the probe
   rates there carry that inflation (explained next to the table).
+- TPU support (torch_xla: `--tpu`, `PJRT_DEVICE=TPU`) is in the code but **unverified**. Its first real run hit two
+  known bugs that were left unfixed ([details](docs/compute_platforms.md)). CUDA GPUs and CPU are the supported
+  paths.
+- bf16 sampling makes each seed's exact face depend on the precision policy. On 64 seeds, bf16 samples differ from
+  fp32 ones by 38 dB PSNR on average, and 21 dB at worst. This is the same on A100 and G4, and the 4090 runs used
+  the same policy, so the metrics compare like with like, but a seed is only exactly reproducible under the same
+  policy.
 - The guidance scale was tuned on FID-10k of the same FFHQ reference used for the headline FID-50k. It is one
   scalar picked from four values, but the tuned number is still not a held-out estimate.
 

@@ -101,7 +101,8 @@ def main() -> None:
     ap.add_argument(
         "--tpu",
         action="store_true",
-        help="data-parallel over all TPU chips (torch_xla); batch sizes are global",
+        help="data-parallel over all TPU chips (torch_xla); batch sizes are global. UNVERIFIED: fails on a "
+        "single-chip v6e-1 (docs/compute_platforms.md)",
     )
     args = ap.parse_args()
     if args.tpu:

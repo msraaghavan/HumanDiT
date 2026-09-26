@@ -1,16 +1,21 @@
-"""HumanDiT follow-up runs on a TPU (torch_xla): a Kaggle TPU v5e-8 script kernel, or a Colab TPU runtime
-(v6e-1 / v5e-1) driven by the Colab CLI (`colab exec -f` this file).
+"""HumanDiT follow-up runs on a cloud VM: a Colab GPU (how the published follow-ups ran: A100) or TPU runtime driven by
+the Colab CLI (`colab exec -f scripts/colab/driver.py`, see scripts/colab/README.md), or a Kaggle script kernel.
+
+TPU (torch_xla) is UNVERIFIED: its first real run (Colab v6e-1) hit two known bugs that were deliberately left unfixed
+-- see docs/compute_platforms.md section 3. Use a CUDA GPU.
 
 Inputs: humandit-code.tar.gz (this repo at a commit) plus the weights (teacher EMA, attribute probe + report, real FFHQ
-DINOv2 statistics). On Kaggle they are private datasets under /kaggle/input; on Colab they are uploaded to
-/content/inputs. Internet is used for FFHQ-256 and the RAEv2 / DINOv2 / clean-fid weights.
+DINOv2 statistics, fixed images for the platform check). On Colab they are uploaded to /content/inputs
+(scripts/colab/upload_inputs.sh); on Kaggle they are private datasets under /kaggle/input. Internet is used for
+FFHQ-256 and the RAEv2 / DINOv2 / clean-fid weights.
 
-Stage 1 rehearses every job at toy size; stage 2 (the real run) starts only if all of stage 1 passed, so a porting
-bug costs minutes of TPU quota, not hours. Jobs:
+HUMANDIT_STAGES picks the stages (default "toy,real"): toy rehearses every job at toy size and stops the driver if any
+job fails, so a porting bug costs minutes, not hours; check runs scripts/platform_check.py (bake-off); real is the
+real run; "pack" alone re-packs earlier outputs. Results are packed into 40 MB parts under /content/dl. Jobs:
     encode  FFHQ-256 -> RAEv2 latents (70k x [image, h-flip]), full-precision matmuls
     label   pseudo-label with the existing probe; coverage must match the original (reproducibility check)
-    gan     GAN student with the fixed discriminator noise levels + teacher anchors, data-parallel on 8 chips,
-            same step count and batch as the original run (2053 x 64)
+    gan     GAN student with the fixed discriminator noise levels + teacher anchors (data-parallel over TPU chips with
+            --tpu), same step count and batch as the original run (2053 x 64)
     eval    that student: FID-50k, FD_DINOv2, precision/recall, memorisation
     control teacher at the tuned guidance 1.55: attribute control + base rates
     steps   teacher at IG 1.55: FID-10k at 10 and 25 steps (50 steps was measured in the guidance sweep)

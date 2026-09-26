@@ -1,0 +1,130 @@
+# Compute for the follow-up runs: Kaggle → Colab, and a hardware bake-off
+
+After the main RunPod run (one RTX 4090, see the README), a handful of follow-ups were left. The biggest was
+retraining the GAN student with the discriminator noise-level fix. The others were its FID-50k evaluation, attribute
+control and a step sweep at the tuned guidance scale, and latent statistics. Together they need about two GPU-hours.
+The RunPod balance was spent, so they had to run elsewhere. This page records what was tried, what was measured, and
+why the final run went to a Colab A100.
+
+## 1. Kaggle TPU v5e-8: queued, never started (abandoned)
+
+- The follow-ups were packaged as one driver (now `scripts/colab/driver.py`, at the time
+  `scripts/kaggle/humandit_tpu.py`) and pushed as a private Kaggle script kernel (TPU v5e-8, internet on, code and
+  weights as two private datasets).
+- The kernel sat in `QUEUED` for over an hour. Neither Kaggle's API nor its web UI shows a queue position or ETA.
+- Things that were ruled out:
+  - The account was phone- and identity-verified, with 0 of 20 TPU hours used.
+  - The job was not silently running: its status stayed `QUEUED` and its log was empty.
+  - An "accelerator toggle" (pushing a CPU version, then the TPU version again) did not reset the queued
+    reservation. The re-push was simply rejected by the one-TPU-session limit.
+- The run was cancelled and moved to Colab.
+- Tooling gotcha: kaggle CLI 2.x `kernels status|logs|output` ignore a `/<version>` suffix and always read the
+  newest version.
+
+## 2. Colab bake-off: TPU v6e-1 vs A100 vs G4
+
+**Why a bake-off:**
+- On paper a TPU v6e-1 (918 TFLOPS bf16) dwarfs an A100.
+- But every earlier number in this repo came from CUDA, so a different accelerator could change results, not just
+  speed.
+- So all three candidates ran the same driver: the full toy rehearsal (every follow-up job at toy size), plus
+  `scripts/platform_check.py`. That script runs the exact code paths of the real jobs on fixed inputs:
+  - Teacher sampling at IG 1.55 with CPU-drawn noise, so the noise is bit-identical everywhere.
+  - RAEv2 encode and decode.
+  - It compares each platform against a full-precision (fp32, no TF32) reference, and times the dominant workloads.
+
+**Decision rules, fixed before any data came in:**
+1. The toy rehearsal must pass.
+2. Outputs must match the fp32 reference as closely as the best GPU does.
+3. Tiebreak: the lowest measured cost per result.
+
+### Colab prices and raw speed (measured)
+
+Units are compute units per hour. Speed is a bf16 8192² matmul measured on the device.
+
+| Accelerator | CU/h | bf16 matmul | CPUs | Software |
+|---|---|---|---|---|
+| TPU v6e-1 | 4.08 | (918 TFLOPS peak, not measured) | 44 | Python 3.13, torch 2.9 + torch_xla 2.9 |
+| A100-SXM4 40 GB | 5.30 | 230 TFLOPS | 12 | Python 3.13, torch 2.11 cu128 |
+| G4 (RTX PRO 6000 Blackwell, 96 GB) | 8.90 | 390 TFLOPS | 48 | Python 3.13, torch 2.11 cu128 |
+| L4 | 1.54 | 62 TFLOPS | 12 | Python 3.13, torch 2.11 cu128 |
+
+### Results
+
+| | A100 | G4 | TPU v6e-1 |
+|---|---|---|---|
+| Toy rehearsal | **10 / 10** | **10 / 10** | **2 / 8** (encode and label passed; see §3) |
+| 50-step sampling, IG 1.55, batch 125 | 13.9 img/s | 18.0 img/s | not reached |
+| RAEv2 encode (full precision) | 363 img/s | 566 img/s | not reached |
+| bf16 train step (teacher size, batch 64) | 0.293 s | 0.191 s | not reached |
+| Cost per 1,000 50-step samples | **0.106 CU** | 0.137 CU | — |
+
+The G4 is 1.3 to 1.6 times faster but costs 1.68 times as much per hour, so the A100 is the cheapest per result:
+- 29% cheaper for sampling,
+- 7% cheaper for encoding,
+- 9% cheaper for training.
+
+**Fidelity against the fp32 reference** (A100 fp32; 64 teacher samples, 32 encoded FFHQ images):
+
+| Run | Teacher latent rel. error, mean / max | Decoded image PSNR (dB), mean / min | Encoder rel. error, mean |
+|---|---|---|---|
+| G4, fp32 | 5.1e-6 / 2.1e-5 | 85.6 / 78.8 | 2.0e-6 |
+| A100, bf16 (production policy) | 6.2e-2 / 2.5e-1 | 37.9 / 21.2 | 3.8e-3 |
+| G4, bf16 (production policy) | 6.1e-2 / 2.5e-1 | 37.8 / 23.0 | 3.8e-3 |
+
+- **The hardware does not change the results.** In fp32 the two GPUs agree to 85 dB. Under the production bf16 policy
+  both sit at the same distance from the reference.
+- **Side finding:** bf16 sampling, on either GPU, changes individual samples noticeably. The mean is 38 dB, but the
+  worst of 64 seeds is 21 dB, because small errors compound over 50 ODE steps. So a seed's exact face depends on the
+  precision policy. The 4090 runs used this same bf16 policy, so all reported metrics compare like with like.
+- The encoder difference (3.8e-3) is TF32, which the original 4090 cache also used.
+
+**Decision: A100.** The whole bake-off cost 8.4 CU, including the time spent uploading inputs to three VMs.
+
+## 3. The TPU (torch_xla) port: two known bugs, not fixed
+
+The TPU support (commit `c59d7e1`: device policy, per-step graph cuts, data-parallel one-step training) was written
+and tested on CPU and CUDA only. Its first run on a real TPU (Colab v6e-1, torch_xla 2.9) failed 5 of 8 rehearsal
+jobs with two bugs:
+
+1. **Attention inputs in mixed precision:** `src/humangen/models/layers.py:68`, `Attention.forward`.
+   - q and k pass through RMSNorm and RoPE and come out as float32, while v comes straight from a Linear as bf16.
+   - Under CUDA autocast, `scaled_dot_product_attention` casts all three inputs to bf16. XLA's autocast does not.
+   - So on XLA it fails with *"Expected query, key, and value to have the same dtype"*.
+   - This broke every job that samples the teacher: control, the step sweep and the latent stats.
+   - Likely fix: cast q and k to v's dtype before SDPA. That is a no-op under CUDA autocast and in fp32.
+2. **Launching on a single chip:** `scripts/onestep.py --tpu`.
+   - `torch_xla.launch` initialises a multi-process runtime.
+   - The Colab v6e-1 image reports `TPU_CHIPS_PER_HOST_BOUNDS=2,2,1` for a one-chip VM, so start-up fails with
+     *"Expected 4 worker addresses, got 1"*.
+   - Likely fix: run single-process when there is one chip, e.g. `TPU_ACCELERATOR_TYPE` ends in `-1`.
+
+**Status: deliberately not fixed.**
+- The GPU was cheaper per result.
+- The GPU keeps new numbers comparable with the 4090 ones.
+- A fixed TPU could at best match the GPUs' fidelity, not beat it.
+
+The code stays but is **unverified**. Treat `--tpu`, `PJRT_DEVICE=TPU` and `HUMANGEN_DEVICE=xla` as experimental.
+Beyond the two bugs, these paths never ran on a TPU:
+- multi-chip data parallelism,
+- the XLA evaluation paths,
+- the TPU timings.
+
+## 4. Colab practicalities (all hit during this run)
+
+- **Platform:** the Colab CLI (`google-colab-cli`) runs on Linux and macOS only. On Windows it runs in WSL.
+- **Login:** it logs in once through OAuth; the user does that step.
+- **Timeouts:** `colab exec --timeout` is a client-side wait. The kernel keeps running if the client gives up or the
+  connection drops. One launch was lost to *"Connection was lost"* before the code reached the kernel.
+- **Transfer limit:** `colab upload` and `download` send a file as one base64 JSON request, and requests above
+  roughly 50 MB are refused. Everything moves in 40 MB parts with a sha256 manifest (`scripts/colab/`).
+- **Speed:** uploads ran at 1.4 MB/s to the europe-west4 TPU and about 6 MB/s to the A100's region.
+- **Environment detection:** Colab images also contain `/kaggle/input` and `/kaggle/working`. The driver detects
+  Colab by `COLAB_RELEASE_TAG`.
+- **Missing packages:**
+  - The TPU image lacks `tensorboard`, `omegaconf` and `clean-fid`.
+  - The driver installs them against a constraints file that pins the image's torch, torchvision and torch_xla,
+    so no dependency can upgrade torch underneath torch_xla.
+- **Spend guard:** a watchdog runs on the laptop (`scripts/colab/watchdog.py`). Every 5 minutes it logs the balance
+  and each VM's state and job status. It stops a VM that has been idle for 15 minutes, any VM at the 8-hour age cap,
+  and everything once the spend cap (60 CU) is reached. It always pulls and verifies results before stopping.
