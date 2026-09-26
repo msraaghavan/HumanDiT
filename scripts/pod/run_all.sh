@@ -109,6 +109,36 @@ for s in wflow gan; do
   stage eval_$s $PY scripts/evaluate.py --ckpt "$RUNS/student_$s/student.safetensors" --kind student --tag ${s}_1step $EV $EVAL_ARGS --steps 1
 done
 stage package bash -c "cd '$KEEP' && tar czf results.tar.gz --exclude='*.pt' --exclude='latest.pt' --exclude='*_images' runs logs && ls -la results.tar.gz"
+
+# ---- Optional ablations (EXTRAS=1), cheapest-first; the deadman bounds them like everything else. ----
+# FID-10k sweeps into runs/eval_extra: Internal Guidance scale, teacher ODE steps, and student step counts.
+if [ "${EXTRAS:-0}" = 1 ]; then
+  if [ "$DRY" = 1 ]; then XN="--n 48 --batch 16"; else XN="--n 10000 --batch 250"; fi
+  XEV="--data $DATA/ffhq-256 --cache $CACHE/ffhq256 --probe $CACHE/attribute_probe.pt --out $RUNS/eval_extra --metrics fid $XN"
+  for m in wflow gan; do for s in 1 2 4; do
+    stage x_${m}_${s}step $PY scripts/evaluate.py --ckpt "$RUNS/student_$m/student.safetensors" --kind student \
+      --tag ${m}_${s}step_10k $XEV --steps $s
+  done; done
+  for ig in 1.00 1.30 1.55 1.78; do
+    stage x_teacher_ig$ig $PY scripts/evaluate.py --ckpt "$T" --tag teacher_ig${ig}_10k $XEV --steps 50 --ig-scale $ig
+  done
+  for n in 10 25; do
+    stage x_teacher_${n}step $PY scripts/evaluate.py --ckpt "$T" --tag teacher_${n}step_10k $XEV --steps $n
+  done
+  BEST=$(uv run --no-sync python - "$RUNS/eval_extra" <<'PY'
+import json, sys
+from pathlib import Path
+r = {json.loads(p.read_text())["guidance"]["ig_scale"]: json.loads(p.read_text())["fid_clean"]
+     for p in Path(sys.argv[1]).glob("teacher_ig*_10k.json")}
+print(f"{min(r, key=r.get):.2f}" if r else "1.78")
+PY
+)
+  echo "[run_all] best Internal Guidance scale at FID-10k: $BEST"
+  if [ "$BEST" != "1.78" ]; then  # re-measure the headline number at the tuned scale, full protocol
+    stage x_teacher_tuned $PY scripts/evaluate.py --ckpt "$T" --tag teacher_tuned $EV $EVAL_ARGS --ig-scale "$BEST" \
+      --metrics fid,fd_dinov2,pr,memo
+  fi
+fi
 echo "[run_all] ALL STAGES COMPLETE ($(date -u +%H:%M:%S))"
 if [ "$GUARD" = 1 ]; then
   # Give the operator time to copy results (they touch $STATE/pulled), then stop to end GPU billing.
