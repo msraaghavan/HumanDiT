@@ -227,7 +227,11 @@ def build_ui(e: Engine) -> gr.Blocks:
                 import imageio.v3 as iio
 
                 za, zb = e.noise(a_), e.noise(b_)
-                omega = torch.arccos((za * zb).sum() / (za.norm() * zb.norm()))
+                if int(a_) == int(b_):
+                    b_ = int(b_) + 1  # identical seeds would make the slerp angle 0 (division by zero)
+                    zb = e.noise(b_)
+                cos = ((za * zb).sum() / (za.norm() * zb.norm())).clamp(-1 + 1e-6, 1 - 1e-6)
+                omega = torch.arccos(cos)
                 ts = torch.linspace(0, 1, int(frames_), device=e.dev)
                 frames = []
                 for i in range(0, len(ts), 8):
@@ -253,6 +257,8 @@ def build_ui(e: Engine) -> gr.Blocks:
             for f in sorted(e.eval_dir.glob("*.json")):
                 try:
                     r = json.loads(f.read_text())
+                    if "fid_clean" not in r:  # latent stats, watermark and ONNX reports are not model evals
+                        continue
                     results[r.get("tag", f.stem)] = {
                         k: r.get(k)
                         for k in (
@@ -270,7 +276,12 @@ def build_ui(e: Engine) -> gr.Blocks:
                 value=results or {"note": "run scripts/evaluate.py to populate"},
                 label="Measured metrics (runs/eval)",
             )
-            pairs = sorted(e.eval_dir.glob("*_nearest_pairs.png"))
+            # the teacher's audit (the alphabetically first file would be the collapsed GAN's)
+            pairs = [
+                p
+                for n in ("teacher_tuned", "teacher")
+                if (p := e.eval_dir / f"{n}_nearest_pairs.png").exists()
+            ]
             if pairs:
                 gr.Image(
                     str(pairs[0]),

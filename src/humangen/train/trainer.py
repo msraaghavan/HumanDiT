@@ -111,11 +111,13 @@ class Trainer:
             "step": str(self.step),
             "samples_seen": str(self.samples_seen),
         }
+        ema_path = self.out / "ckpt" / "ema.safetensors"  # written atomically, like latest.pt
         save_file(
             {k: v.contiguous() for k, v in self.ema.state_dict().items()},
-            str(self.out / "ckpt" / "ema.safetensors"),
+            str(ema_path.with_suffix(".tmp")),
             meta,
         )
+        os.replace(ema_path.with_suffix(".tmp"), ema_path)
 
     def _resume(self) -> None:
         path = self.out / "ckpt" / "latest.pt"

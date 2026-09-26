@@ -119,7 +119,13 @@ def build(runs: Path) -> str:
                 f"| {label} | {r.get('steps', 1)} | {_fmt(r.get('fid_clean'))} | {_fmt(r.get('fid_legacy_tensorflow'))} | "
                 f"{_fmt(r.get('fd_dinov2'), 1)} | {_fmt(r.get('precision'), 3)} | {_fmt(r.get('recall'), 3)} | {_fmt(sp, 1)} |"
             )
-        lines.append("")
+        lines += [
+            "",
+            "FID: clean-fid against FFHQ-256 trainval70k. FD_DINOv2: Fréchet distance in DINOv2 ViT-L/14 CLS space vs "
+            "all 70k FFHQ faces. Precision/recall: k-NN (k = 3) coverage in the same DINOv2 space, 10k generated vs "
+            "10k real.",
+            "",
+        ]
         legacy = ev.get("legacy_dcgan_64px") or {}
         if legacy.get("fid_clean_64px_vs_ffhq64") is not None:
             lines += [

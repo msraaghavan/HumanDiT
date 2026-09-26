@@ -37,6 +37,8 @@ lipstick, grey hair), with attribute CFG 2.0. Every image is synthetic. Rendered
 | GAN student, adversarial only (1st attempt: **mode collapse**), 1 step | 1 | 206.87 | 204.91 | 2400.6 | 0.532 | 0.000 | 287.1 |
 | *Before:* original DCGAN (bugs fixed), 64×64 | 1 | 177.60 | 172.09 | – | – | – | – |
 
+FID: clean-fid against FFHQ-256 trainval70k. FD_DINOv2: Fréchet distance in DINOv2 ViT-L/14 CLS space vs all 70k FFHQ faces. Precision/recall: k-NN (k = 3) coverage in the same DINOv2 space, 10k generated vs 10k real.
+
 The DCGAN generates 64×64 images, so the 256 px reference also penalises it for resolution. Scored at its own resolution against all 70k FFHQ faces downsampled to 64×64, its FID (clean) is **45.8**.
 
 The tuned row uses the guidance scale that won the FID-10k sweep below (1.55), re-scored on 50,000 samples. Only the guidance scale differs, so its speed equals the default's. Attribute control and latent statistics below were measured at the default 1.78, before the sweep.
@@ -207,7 +209,9 @@ Everything below happened during this project's single cloud run. Each fix is in
 | **FID crashed on the pod** | Python 3.14 made `forkserver` the Linux default, so clean-fid's DataLoader can't pickle its resize closure. It passed on Windows only because Windows uses 0 workers. | One `cleanfid()` helper: fork workers on Linux, plus the SciPy 1.18 `sqrtm` patch (which was also missing from one call site). |
 | **Grey samples at 1M training samples** | The EMA half-life of 1.4M samples has no warm-up, so 61% of the EMA was still the zero-initialised output layer. | Checked the raw weights instead: they already made faces after 40 min. Documented, not "fixed", so results come from the exact code that ran. |
 | **W-Flow OOM at batch 128** | In eager mode, the teacher, EMA and AdamW states plus activations exceeded 24 GB. | Activation checkpointing for the student and the discriminator trunk: peak 10.9 GiB (W-Flow) and 7.6 GiB (GAN). |
-| **The GAN student collapsed to one face** | FID 207, recall 0. The discriminator sat at chance, since a per-sample D on re-noised latents cannot see missing diversity. | Second attempt: a pseudo-Huber anchor to 6,144 teacher ODE pairs (`onestep.py gan --anchor-pairs`). The collapse is gone (FID 207 → 33.1, recall 0 → 0.155), but it still loses to W-Flow (23.0), so the demo ships W-Flow. |
+| **The GAN student collapsed to one face** | FID 207, recall 0, with the discriminator sitting at chance. | Second attempt: a pseudo-Huber anchor to 6,144 teacher ODE pairs (`onestep.py gan --anchor-pairs`). The collapse is gone (FID 207 → 33.1, recall 0 → 0.155), but it still loses to W-Flow (23.0), so the demo ships W-Flow. |
+| **…and a code review later found why** | `renoise` clamped the teacher's timestep distribution (median t = 0.89) at 0.7, so ~89% of the discriminator's inputs were at exactly t = 0.7, i.e. 70% noise. A D that almost never sees clean latents cannot judge detail or diversity. Both GAN runs above used this bug. | Fixed: uniform t on (0, 0.7], with a regression test. The fixed GAN has **not** been retrained yet, so the W-Flow vs GAN comparison above is against a handicapped GAN. |
+| **An evaluation precision leak (found in code review)** | `iterate_latents` yielded from inside its `autocast` block, and autocast is thread-global. So on the 4090, generated images were decoded and featurised in bf16, while the real FFHQ features were fp32. | Fixed, with a regression test. Measured on the same 2,000 latents (`scripts/autocast_leak_check.py`): FD_DINOv2 moves by 0.03%, precision/recall by ≤ 0.005 (sampling noise) and decoded images differ by 53 dB PSNR, so every reported number stands. |
 | **The last results were stranded on a stopped pod** | The budget deadman stopped the pod at the spending cap, as designed, before the ablation stage's results were pulled. My laptop-side watcher had matched its own echoed command, so it never triggered the pull. A Community pod's disk lives on its host, and that GPU was re-rented, so the pod couldn't restart. | Recovered by resuming the pod as a GPU-less *transfer* pod, then verified file-for-file against the pod. Lesson for next time: pull after every stage, or use a network volume that isn't tied to one host. |
 | **The watermark didn't work** | `invisible-watermark` DWT-DCT recovered 0 of 6 marks on 256 px faces and changed pixels by up to 179 levels. | Replaced it with TrustMark: 100% recovery after PNG, JPEG q75, rescaling and cropping, 43 dB PSNR, and 0 false positives (`scripts/watermark_eval.py`). |
 
@@ -262,7 +266,8 @@ its "latent consistency" loss penalised output differences between nearby latent
   distillation trades diversity for speed. It is a pure one-step model, and more steps make it worse (see the
   ablation). W-Flow here is my adaptation (drift in the RAEv2 latent itself, teacher initialisation), not the paper's
   exact setup.
-- The first GAN student collapsed. The anchored retry fixed the collapse but still lost to W-Flow. Both are reported.
+- The first GAN student collapsed. The anchored retry fixed the collapse but still lost to W-Flow. Both runs had a
+  discriminator noise-level bug (found afterwards, now fixed), so the W-Flow vs GAN verdict is provisional.
 - The default guidance scale (1.78, chosen before training) over-guides: it inflates latent statistics by about a
   third and costs FID (4.60 vs 3.78 at 1.55). The attribute-control numbers were measured at 1.78, so the probe
   rates there carry that inflation (explained next to the table).

@@ -4,10 +4,10 @@
     python scripts/onestep.py gan   --teacher runs/teacher_b/ckpt/ema.safetensors --minutes 60
     python scripts/onestep.py gan   --teacher ... --anchor-pairs 8192    # + regression to teacher ODE outputs
 
-Without an anchor, the adversarial student mode-collapsed (one face for every noise; FID 207): a per-sample
-discriminator on re-noised latents cannot see missing diversity. The anchor regresses the student onto teacher ODE
-samples for fixed (noise, attributes) pairs with a pseudo-Huber loss, which pins diversity; the adversarial term
-then sharpens.
+Without an anchor, the adversarial student mode-collapsed (one face for every noise; FID 207). The anchor
+regresses the student onto teacher ODE samples for fixed (noise, attributes) pairs with a pseudo-Huber loss, which
+pins diversity (FID 33.1). A later review found a likely root cause of the weak GAN: the discriminator's noise levels
+were clamped so ~89% of its inputs sat at t = 0.7 (see `renoise`, now fixed); both reported GAN runs used that bug.
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ import argparse
 import copy
 import json
 import math
+import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -186,9 +187,11 @@ def main() -> None:
             "step": str(step),
             "teacher": str(args.teacher),
         }
-        save_file(
-            {kk: v.contiguous() for kk, v in ema.state_dict().items()}, str(out / "student.safetensors"), md
-        )
+        tmp = (
+            out / "student.safetensors.tmp"
+        )  # atomic: a crash mid-save must not corrupt the last good student
+        save_file({kk: v.contiguous() for kk, v in ema.state_dict().items()}, str(tmp), md)
+        os.replace(tmp, out / "student.safetensors")
 
     while step < args.max_steps and time.perf_counter() - t_start < args.minutes * 60:
         cond, real, real_attrs = fut.result()

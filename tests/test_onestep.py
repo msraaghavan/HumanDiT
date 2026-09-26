@@ -2,7 +2,7 @@ import torch
 
 from humangen.diffusion.transport import Transport
 from humangen.models.dit_dh import HumanDiTDH, make_config
-from humangen.onestep.adversarial import TrunkDiscriminator, d_loss, g_loss
+from humangen.onestep.adversarial import TrunkDiscriminator, d_loss, g_loss, renoise
 from humangen.onestep.wflow import barycentric_map, grouped_wflow_loss, sinkhorn_plan, wflow_loss
 
 
@@ -59,3 +59,14 @@ def test_gan_losses_backprop_to_generator_only_through_heads():
     lg = g_loss(disc, fake, attrs, tr)
     lg.backward()
     assert fake.grad is not None and fake.grad.abs().sum() > 0
+
+
+def test_renoise_spreads_discriminator_noise_levels():
+    # Regression: clamping the shifted logit-normal put ~89% of D's inputs at exactly t_max.
+    torch.manual_seed(0)
+    x = torch.zeros(20000, 1, 1, 1)
+    _, t = renoise(x, Transport(), t_max=0.7)
+    assert t.min() > 0 and t.max() <= 0.7
+    assert (t > 0.7 - 1e-6).float().mean() < 0.01
+    assert abs(t.mean().item() - 0.35) < 0.02
+    assert (t < 0.2).float().mean() > 0.25  # near-clean inputs, where detail is visible, are common

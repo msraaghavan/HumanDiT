@@ -59,8 +59,12 @@ class TrunkDiscriminator(nn.Module):
 
 
 def renoise(x: torch.Tensor, transport: Transport, t_max: float = 0.7) -> tuple[torch.Tensor, torch.Tensor]:
-    """Sample t ~ shifted-uniform on (0, t_max] and noise x (D sees clean-ish to fairly noisy inputs)."""
-    t = transport.sample_t(x.shape[0], x.device).clamp(max=t_max)
+    """Sample t ~ uniform on (0, t_max] and noise x, so D sees everything from near-clean to fairly noisy inputs.
+
+    The first version clamped the teacher's training-time distribution (logit-normal, shift 8, median t = 0.89) at
+    t_max, which put ~89% of D's inputs at exactly t = 0.7: mostly noise, so D could not judge detail or diversity.
+    """
+    t = torch.rand(x.shape[0], device=x.device).clamp_min(1e-3) * t_max
     return transport.interpolate(x, torch.randn_like(x), t), t
 
 

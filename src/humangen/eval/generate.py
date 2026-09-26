@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -68,12 +69,17 @@ def iterate_latents(
     attrs_fn: Callable[[int, int], torch.Tensor] | None = None,
     autocast: Callable | None = None,
 ) -> Iterator[tuple[torch.Tensor, torch.Tensor]]:
-    """Yields (latents, attrs) batches with deterministic per-batch noise."""
+    """Yields (latents, attrs) batches with deterministic per-batch noise.
+
+    Sampling runs under `autocast`; the yield happens *outside* it. Grad mode and autocast are thread-global, so
+    yielding inside the `with` block would leak them into the caller's code (decoding, feature extraction).
+    """
     for i in range(0, n, batch):
         b = min(batch, n - i)
         g = torch.Generator(device="cpu").manual_seed(seed * 1_000_003 + i)
         noise = torch.randn(b, 1024, 16, 16, generator=g).to(device)
         attrs = (attrs_fn(i, b) if attrs_fn else torch.zeros(b, num_attributes, dtype=torch.long)).to(device)
-        ctx = autocast() if autocast else torch.no_grad()
+        ctx = autocast() if autocast else contextlib.nullcontext()
         with torch.no_grad(), ctx:
-            yield sample_fn(noise, attrs).float(), attrs
+            z = sample_fn(noise, attrs).float()
+        yield z, attrs
