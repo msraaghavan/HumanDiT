@@ -32,37 +32,40 @@ lipstick, grey hair), with attribute CFG 2.0. Every image is synthetic. Rendered
 |---|---|---|---|---|---|---|---|
 | **Teacher, 50-step ODE + Internal Guidance 1.55 (tuned)** | 50 | 3.78 | 3.87 | 49.0 | 0.819 | 0.680 | – |
 | Teacher, 50-step ODE + Internal Guidance 1.78 (default) | 50 | 4.60 | 4.59 | 62.4 | 0.787 | 0.683 | 14.5 |
+| **GAN student + anchor, discriminator fixed (3rd attempt), 1 step** † | 1 | 20.01 | 20.55 | 239.1 | 0.728 | 0.339 | – |
 | W-Flow student, 1 step | 1 | 23.01 | 23.29 | 376.2 | 0.688 | 0.163 | 286.3 |
-| GAN student + teacher-pair anchor (2nd attempt), 1 step | 1 | 33.08 | 32.14 | 504.6 | 0.630 | 0.155 | 287.2 |
+| GAN student + teacher-pair anchor (2nd attempt, discriminator bug), 1 step | 1 | 33.08 | 32.14 | 504.6 | 0.630 | 0.155 | 287.2 |
 | GAN student, adversarial only (1st attempt: **mode collapse**), 1 step | 1 | 206.87 | 204.91 | 2400.6 | 0.532 | 0.000 | 287.1 |
 | *Before:* original DCGAN (bugs fixed), 64×64 | 1 | 177.60 | 172.09 | – | – | – | – |
 
 FID: clean-fid against FFHQ-256 trainval70k. FD_DINOv2: Fréchet distance in DINOv2 ViT-L/14 CLS space vs all 70k FFHQ faces. Precision/recall: k-NN (k = 3) coverage in the same DINOv2 space, 10k generated vs 10k real.
 
+† Trained and scored on a Colab A100-SXM4-40GB (same code, data, steps and bf16 policy as the 4090 rows); its speed was not timed. A measured bake-off showed that GPU choice does not move these metrics ([docs/compute_platforms.md](docs/compute_platforms.md)). The only change from the 2nd attempt is the discriminator noise-level fix.
+
 The DCGAN generates 64×64 images, so the 256 px reference also penalises it for resolution. Scored at its own resolution against all 70k FFHQ faces downsampled to 64×64, its FID (clean) is **45.8**.
 
-The tuned row uses the guidance scale that won the FID-10k sweep below (1.55), re-scored on 50,000 samples. Only the guidance scale differs, so its speed equals the default's. Attribute control and latent statistics below were measured at the default 1.78, before the sweep.
+The tuned row uses the guidance scale that won the FID-10k sweep below (1.55), re-scored on 50,000 samples. Only the guidance scale differs, so its speed equals the default's. Attribute control and latent statistics below are also at the tuned 1.55, with the default 1.78 for comparison.
 
-### Attribute control (teacher, CFG 2.0; scored by the DINOv3 probe on generated latents)
+### Attribute control (teacher, IG 1.55, CFG 2.0; scored by the DINOv3 probe on generated latents)
 
 | Attribute | asked *present* → probe agrees | asked *absent* → probe agrees | base rate (unconditional) |
 |---|---|---|---|
-| Male | 72.7% | 89.1% | 48.2% |
-| Eyeglasses | 88.3% | 85.9% | 27.3% |
-| Hat | 88.3% | 89.1% | 15.9% |
-| Goatee | 95.3% | 84.0% | 24.0% |
-| Sideburns | 91.4% | 84.4% | 21.2% |
-| Beard | 96.1% | 74.6% | 27.5% |
-| Lipstick | 73.0% | 84.4% | 30.2% |
-| Gray Hair | 95.3% | 74.2% | 24.0% |
-| Bangs | 89.5% | 79.7% | 30.1% |
-| Blond Hair | 75.4% | 82.8% | 17.0% |
-| Smiling | 78.5% | 88.3% | 60.8% |
-| Mouth Open | 84.0% | 81.6% | 55.7% |
+| Male | 70.3% | 97.3% | 45.5% |
+| Eyeglasses | 94.1% | 94.9% | 23.7% |
+| Hat | 94.5% | 93.4% | 12.7% |
+| Goatee | 98.8% | 89.5% | 19.8% |
+| Sideburns | 98.8% | 89.5% | 17.6% |
+| Beard | 99.2% | 82.4% | 24.1% |
+| Lipstick | 82.4% | 86.3% | 32.3% |
+| Gray Hair | 97.7% | 80.9% | 18.9% |
+| Bangs | 94.9% | 88.3% | 24.9% |
+| Blond Hair | 84.0% | 85.2% | 13.7% |
+| Smiling | 84.8% | 91.0% | 62.4% |
+| Mouth Open | 90.2% | 90.2% | 55.7% |
 
-Mean controllability accuracy: **84.4%**.
+Mean controllability accuracy: **89.9%**. At the default IG 1.78 it was 84.4%.
 
-The probe over-fires on *generated* latents. For the rarer attributes (hat, goatee, sideburns, gray hair, blond hair) it calls 16%–24% of unconditional samples positive, while FFHQ has 3%–9%. Internal Guidance extrapolation inflates latent statistics: latent std is 1.37 with guidance, vs 1.01 without it and 1.03 for real FFHQ latents (`scripts/latent_stats.py`). So the absolute percentages are approximate; the shift from the base-rate column is the controllable effect.
+The probe over-fires on *generated* latents. For the rarer attributes (hat, goatee, sideburns, gray hair, blond hair) it calls 13%–20% of unconditional samples positive, while FFHQ has 3%–9%. Internal Guidance extrapolation inflates latent statistics: latent std is 1.18 at IG 1.55, vs 1.02 without guidance and 1.03 for real FFHQ latents (1.36 at the default 1.78) (`scripts/latent_stats.py`). So the absolute percentages are approximate; the shift from the base-rate column is the controllable effect.
 
 ### Memorisation audit (DINOv3 space, 10,000 samples vs every training face)
 
@@ -70,6 +73,7 @@ The probe over-fires on *generated* latents. For the rarer attributes (hat, goat
 - Fraction of samples closer to a training face than 99.9% of real faces are to each other: **0.000%**.
 - Caveat: generated faces sit *further* from the training set than real faces sit from each other. That is partly the same guidance-induced shift in latent statistics, so this feature space understates similarity. The direct evidence is below: the 8 **most similar** pairs out of 10,000 share pose and studio style, but show different people.
 - At the tuned guidance scale (1.55), the generated median is 0.71 (p99 0.86), closer to the training-set statistics as the caveat predicts, and 0.000% of samples exceed the threshold.
+- The fixed one-step GAN student: generated median 0.77 (p99 0.87), and 0.000% of samples exceed the threshold.
 
 ![most similar generated (top) vs training (bottom)](docs/assets/teacher_nearest_pairs.jpg)
 
@@ -85,6 +89,9 @@ FID-10k is biased upwards relative to FID-50k; compare within this table only.
 
 | Model | NFE | FID-10k ↓ |
 |---|---|---|
+| Teacher (IG 1.55) | 10 | 5.94 |
+| Teacher (IG 1.55) | 25 | 4.79 |
+| Teacher (IG 1.55) | 50 | 5.23 |
 | Teacher (IG 1.78) | 10 | 5.58 |
 | Teacher (IG 1.78) | 25 | 4.65 |
 | Teacher (IG 1.78) | 50 | 6.08 |
@@ -92,9 +99,9 @@ FID-10k is biased upwards relative to FID-50k; compare within this table only.
 | W-Flow student | 2 | 28.47 |
 | W-Flow student | 4 | 34.80 |
 
-With IG 1.78, 25 steps score better than 50 (4.65 vs 6.08).
+With IG 1.55, 25 steps score better than 50 (4.79 vs 5.23).
 
-Together with the guidance sweep, this suggests 1.78 over-guides; the step count at the tuned scale was not swept.
+With IG 1.78, 25 steps score better than 50 (4.65 vs 6.08).
 
 ### CPU-only deployment (ONNX Runtime, laptop CPU, batch 1)
 
@@ -199,8 +206,8 @@ flowchart LR
 - **Measured hardware bake-off before the follow-up run.** A Colab TPU v6e-1, A100 and G4 (RTX PRO 6000) each ran
   every follow-up job at toy size. Each also ran [`scripts/platform_check.py`](scripts/platform_check.py) against an
   fp32 reference, on the same seeds and the same CPU-drawn noise:
-  - **The GPUs give identical results.** In fp32 they agree to 85 dB, and under the bf16 production policy both sit
-    the same distance from the reference.
+  - **The GPUs are interchangeable.** In fp32 they agree to 85 dB. Under the bf16 production policy both sit the same
+    distance from the reference, and their samples differ from each other (46 dB) less than either differs from fp32.
   - **The A100 is the cheapest per result.** The G4 is 1.3 to 1.6 times faster but 1.68 times the price.
   - **The TPU failed its rehearsal on two torch_xla porting bugs**, documented and deliberately left unfixed.
 
@@ -222,8 +229,8 @@ Everything below happened during this project's cloud runs: the main run on a Ru
 | **FID crashed on the pod** | Python 3.14 made `forkserver` the Linux default, so clean-fid's DataLoader can't pickle its resize closure. It passed on Windows only because Windows uses 0 workers. | One `cleanfid()` helper: fork workers on Linux, plus the SciPy 1.18 `sqrtm` patch (which was also missing from one call site). |
 | **Grey samples at 1M training samples** | The EMA half-life of 1.4M samples has no warm-up, so 61% of the EMA was still the zero-initialised output layer. | Checked the raw weights instead: they already made faces after 40 min. Documented, not "fixed", so results come from the exact code that ran. |
 | **W-Flow OOM at batch 128** | In eager mode, the teacher, EMA and AdamW states plus activations exceeded 24 GB. | Activation checkpointing for the student and the discriminator trunk: peak 10.9 GiB (W-Flow) and 7.6 GiB (GAN). |
-| **The GAN student collapsed to one face** | FID 207, recall 0, with the discriminator sitting at chance. | Second attempt: a pseudo-Huber anchor to 6,144 teacher ODE pairs (`onestep.py gan --anchor-pairs`). The collapse is gone (FID 207 → 33.1, recall 0 → 0.155), but it still loses to W-Flow (23.0), so the demo ships W-Flow. |
-| **…and a code review later found why** | `renoise` clamped the teacher's timestep distribution (median t = 0.89) at 0.7, so ~89% of the discriminator's inputs were at exactly t = 0.7, i.e. 70% noise. A D that almost never sees clean latents cannot judge detail or diversity. Both GAN runs above used this bug. | Fixed: uniform t on (0, 0.7], with a regression test. The fixed GAN has **not** been retrained yet, so the W-Flow vs GAN comparison above is against a handicapped GAN. |
+| **The GAN student collapsed to one face** | FID 207, recall 0, with the discriminator sitting at chance. | Second attempt: a pseudo-Huber anchor to 6,144 teacher ODE pairs (`onestep.py gan --anchor-pairs`). The collapse is gone (FID 207 → 33.1, recall 0 → 0.155), but it still lost to W-Flow (23.0). The next row explains why. |
+| **…and a code review later found why** | `renoise` clamped the teacher's timestep distribution (median t = 0.89) at 0.7, so ~89% of the discriminator's inputs were at exactly t = 0.7, i.e. 70% noise. A D that almost never sees clean latents cannot judge detail or diversity. Both GAN runs above used this bug. | Fixed: uniform t on (0, 0.7], with a regression test. Retrained with only this change, on a Colab A100 with the same data, anchors, batch and 2,053 steps: FID 33.1 → **20.0**, recall 0.155 → **0.339**, FD_DINOv2 505 → 239. The fixed GAN now beats W-Flow on all four metrics. |
 | **An evaluation precision leak (found in code review)** | `iterate_latents` yielded from inside its `autocast` block, and autocast is thread-global. So on the 4090, generated images were decoded and featurised in bf16, while the real FFHQ features were fp32. | Fixed, with a regression test. Measured on the same 2,000 latents (`scripts/autocast_leak_check.py`): FD_DINOv2 moves by 0.03%, precision/recall by ≤ 0.005 (sampling noise) and decoded images differ by 53 dB PSNR, so every reported number stands. |
 | **The last results were stranded on a stopped pod** | The budget deadman stopped the pod at the spending cap, as designed, before the ablation stage's results were pulled. My laptop-side watcher had matched its own echoed command, so it never triggered the pull. A Community pod's disk lives on its host, and that GPU was re-rented, so the pod couldn't restart. | Recovered by resuming the pod as a GPU-less *transfer* pod, then verified file-for-file against the pod. Lesson for next time: pull after every stage, or use a network volume that isn't tied to one host. |
 | **The Kaggle TPU job never started** | It sat `QUEUED` for over an hour on a TPU v5e-8, and Kaggle shows no queue position. The account was verified, with no TPU hours used. "Toggling" the accelerator did not reset the reservation. | Cancelled and moved to Colab, where VMs start in seconds. |
@@ -265,8 +272,8 @@ uv run --extra demo python app/gradio_app.py            # live demo
 | | Original project | HumanDiT |
 |---|---|---|
 | Model | DCGAN (2015), 64×64 | RAEv2 latent diffusion transformer, 256×256 |
-| Quality (FID-50k vs FFHQ-256, clean) | **177.6** (45.8 at its own 64 px) | **3.78** (teacher, tuned guidance) · 23.0 (1-step student) |
-| Control | none | 12 face attributes, any subset (84% probe agreement) |
+| Quality (FID-50k vs FFHQ-256, clean) | **177.6** (45.8 at its own 64 px) | **3.78** (teacher, tuned guidance) · 20.0 (1-step GAN student) |
+| Control | none | 12 face attributes, any subset (90% probe agreement at the tuned guidance) |
 | Sampling | 1 step (GAN) | 50-step teacher **and** a 1-step student, 20× faster |
 | Evaluation | none | FID, FD_DINOv2, precision/recall, controllability, memorisation, guidance and step ablations |
 | Safety | none | measured watermark, memorisation audit, model card |
@@ -281,22 +288,25 @@ its "latent consistency" loss penalised output differences between nearby latent
   CelebA-derived pseudo-labels (e.g. a binary "Male" label), so they are a simplification.
 - Results are not SOTA: the best published FFHQ-256 FIDs are about 2–3, from far larger compute budgets. The teacher
   trained for 10.8 h on one RTX 4090 (12M samples).
-- The one-step student is 20× faster but much worse (FID 23.0 vs 3.78, recall 0.16 vs 0.68): 45 min of W-Flow
-  distillation trades diversity for speed. It is a pure one-step model, and more steps make it worse (see the
+- The one-step students are 20× faster but clearly worse than the teacher. The best, the fixed GAN, reaches FID 20.0
+  vs 3.78 and recall 0.34 vs 0.68. W-Flow (23.0) is a pure one-step model: more steps make it worse (see the
   ablation). W-Flow here is my adaptation (drift in the RAEv2 latent itself, teacher initialisation), not the paper's
   exact setup.
-- The first GAN student collapsed. The anchored retry fixed the collapse but still lost to W-Flow. Both runs had a
-  discriminator noise-level bug (found afterwards, now fixed), so the W-Flow vs GAN verdict is provisional.
+- GAN vs W-Flow rests on one training run each, on comparable budgets: 43 min for the GAN, including its teacher
+  anchors, vs 45 min for W-Flow. The fixed GAN wins on all four metrics, by wide margins on FD_DINOv2 (239 vs 376) and
+  recall (0.34 vs 0.16), so the direction is clear, but the exact margins are single-run numbers.
 - The default guidance scale (1.78, chosen before training) over-guides: it inflates latent statistics by about a
   third and costs FID (4.60 vs 3.78 at 1.55). The attribute-control numbers were measured at 1.78, so the probe
   rates there carry that inflation (explained next to the table).
 - TPU support (torch_xla: `--tpu`, `PJRT_DEVICE=TPU`) is in the code but **unverified**. Its first real run hit two
   known bugs that were left unfixed ([details](docs/compute_platforms.md)). CUDA GPUs and CPU are the supported
   paths.
-- bf16 sampling makes each seed's exact face depend on the precision policy. On 64 seeds, bf16 samples differ from
-  fp32 ones by 38 dB PSNR on average, and 21 dB at worst. This is the same on A100 and G4, and the 4090 runs used
-  the same policy, so the metrics compare like with like, but a seed is only exactly reproducible under the same
-  policy.
+- bf16 sampling makes each seed's exact face depend on the precision policy and, slightly, on the GPU:
+  - On 64 seeds, bf16 samples differ from fp32 ones by 38 dB PSNR on average, and 21 dB at worst.
+  - A100 and G4 bf16 samples differ from each other by 46 dB.
+  - The 4090 runs used the same policy, so the metrics compare like with like.
+  - But a seed's face reproduces across GPUs only in fp32 (85 dB, i.e. to within float rounding). In bf16 it can
+    shift slightly.
 - The guidance scale was tuned on FID-10k of the same FFHQ reference used for the headline FID-50k. It is one
   scalar picked from four values, but the tuned number is still not a held-out estimate.
 

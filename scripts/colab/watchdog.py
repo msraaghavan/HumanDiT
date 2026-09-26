@@ -113,15 +113,31 @@ def pull(name: str) -> bool:
         return True
     dst = PULLED / name
     parts = dst / "parts"
+    parts.mkdir(parents=True, exist_ok=True)
+    manifest, fresh = parts / "MANIFEST.json", parts / "MANIFEST.new"
+    if not download(name, "/content/dl/MANIFEST.json", fresh):
+        return False
+    if not manifest.exists() or manifest.read_bytes() != fresh.read_bytes():
+        for stale in parts.glob("*.part*"):  # parts of an earlier pack on this VM reuse the same names
+            stale.unlink()
+    fresh.replace(manifest)
     ok = True
     for f in files:
-        if not (parts / f).exists() or f == "MANIFEST.json":
+        if f != "MANIFEST.json" and not (parts / f).exists():
             ok &= download(name, f"/content/dl/{f}", parts / f)
-    if not ok or not (parts / "MANIFEST.json").exists():
+    if not ok:
         return False
-    for fname, info in json.loads((parts / "MANIFEST.json").read_text()).items():
+
+    def sha256(path: Path) -> str:
+        h = hashlib.sha256()
+        with open(path, "rb") as fh:
+            while chunk := fh.read(1 << 24):
+                h.update(chunk)
+        return h.hexdigest()
+
+    for fname, info in json.loads(manifest.read_text()).items():
         out = dst / fname
-        if out.exists() and out.stat().st_size == info["bytes"]:
+        if out.exists() and sha256(out) == info["sha256"]:
             continue
         h = hashlib.sha256()
         with open(out, "wb") as w:
@@ -131,6 +147,8 @@ def pull(name: str) -> bool:
                 w.write(b)
         if h.hexdigest() != info["sha256"]:
             out.unlink()
+            for part in info["parts"]:  # a bad or stale part: fetch them all again on the next pull
+                (parts / part).unlink(missing_ok=True)
             log(f"  {name}: {fname} sha256 MISMATCH after reassembly")
             ok = False
         else:

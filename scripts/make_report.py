@@ -108,8 +108,9 @@ def build(runs: Path) -> str:
             f"Teacher, {t0.get('steps', '?')}-step ODE + Internal Guidance "
             f"{(t0.get('guidance') or {}).get('ig_scale', '?')} (default)",
         ),
+        ("gan_fixed_1step", "**GAN student + anchor, discriminator fixed (3rd attempt), 1 step** †"),
         ("wflow_1step", "W-Flow student, 1 step"),
-        ("gan_anchor_1step", "GAN student + teacher-pair anchor (2nd attempt), 1 step"),
+        ("gan_anchor_1step", "GAN student + teacher-pair anchor (2nd attempt, discriminator bug), 1 step"),
         ("gan_1step", "GAN student, adversarial only (1st attempt: **mode collapse**), 1 step"),
         ("legacy_dcgan_64px", "*Before:* original DCGAN (bugs fixed), 64×64"),
     ]
@@ -137,6 +138,15 @@ def build(runs: Path) -> str:
             "10k real.",
             "",
         ]
+        gf = ev.get("gan_fixed_1step")
+        if gf:
+            lines += [
+                f"† Trained and scored on a Colab {gf.get('gpu', 'GPU').replace('NVIDIA ', '')} (same code, data, steps "
+                "and bf16 policy as the 4090 rows); its speed was not timed. A measured bake-off showed that GPU "
+                "choice does not move these metrics ([docs/compute_platforms.md](docs/compute_platforms.md)). "
+                "The only change from the 2nd attempt is the discriminator noise-level fix.",
+                "",
+            ]
         legacy = ev.get("legacy_dcgan_64px") or {}
         if legacy.get("fid_clean_64px_vs_ffhq64") is not None:
             lines += [
@@ -150,17 +160,28 @@ def build(runs: Path) -> str:
                 (tt.get("guidance") or {}).get("ig_scale"),
                 (t0.get("guidance") or {}).get("ig_scale"),
             )
+            tc = ev.get("teacher_tuned_control")
             lines += [
                 f"The tuned row uses the guidance scale that won the FID-10k sweep below ({ig_t}), re-scored on "
                 f"{tt.get('n', 0):,} samples. Only the guidance scale differs, so its speed equals the default's. "
-                f"Attribute control and latent statistics below were measured at the default {ig_0}, before the sweep.",
+                + (
+                    f"Attribute control and latent statistics below are also at the tuned {ig_t}, with the default "
+                    f"{ig_0} for comparison."
+                    if tc
+                    else f"Attribute control and latent statistics below were measured at the default {ig_0}, "
+                    "before the sweep."
+                ),
                 "",
             ]
         t = ev.get("teacher") or {}
-        if t.get("controllability"):
-            c = t["controllability"]
+        tc = ev.get("teacher_tuned_control") or {}
+        ctl = tc if tc.get("controllability") else t  # prefer the tuned-guidance control run
+        if ctl.get("controllability"):
+            c = ctl["controllability"]
+            ig_c = (ctl.get("guidance") or {}).get("ig_scale")
             lines += [
-                f"### Attribute control (teacher, CFG {c['cfg_scale']}; scored by the DINOv3 probe on generated latents)",
+                f"### Attribute control (teacher, IG {ig_c}, CFG {c['cfg_scale']}; scored by the DINOv3 probe on "
+                "generated latents)",
                 "",
                 "| Attribute | asked *present* → probe agrees | asked *absent* → probe agrees | base rate (unconditional) |",
                 "|---|---|---|---|",
@@ -171,10 +192,18 @@ def build(runs: Path) -> str:
                 lines.append(
                     f"| {name.replace('_', ' ')} | {v['yes']:.1%} | {v['no']:.1%} | {'–' if b is None else f'{b:.1%}'} |"
                 )
-            lines += ["", f"Mean controllability accuracy: **{c['mean_accuracy']:.1%}**.", ""]
+            default_acc = ""
+            if ctl is tc and t.get("controllability"):
+                default_acc = (
+                    f" At the default IG {(t.get('guidance') or {}).get('ig_scale')} it was "
+                    f"{t['controllability']['mean_accuracy']:.1%}."
+                )
+            lines += ["", f"Mean controllability accuracy: **{c['mean_accuracy']:.1%}**.{default_acc}", ""]
             cov = (_load(runs / "attributes" / "attributes.json") or {}).get("ffhq_label_coverage", {})
             rare = [n for n in base if n in cov and cov[n]["present"] < 0.10]
-            stats_ = _load(runs / "eval" / "latent_stats.json")
+            stats_ = _load(runs / "eval" / "latent_stats_tuned.json") or _load(
+                runs / "eval" / "latent_stats.json"
+            )
             if rare and base:
                 gen_r = [base[n] for n in rare]
                 data_r = [cov[n]["present"] for n in rare]
@@ -183,12 +212,18 @@ def build(runs: Path) -> str:
                     f"({', '.join(n.replace('_', ' ').lower() for n in rare)}) it calls {min(gen_r):.0%}–{max(gen_r):.0%} "
                     f"of unconditional samples positive, while FFHQ has {min(data_r):.0%}–{max(data_r):.0%}."
                 )
-                ig_key = f"ig_{(t.get('guidance') or {}).get('ig_scale', 1.78):.2f}"
+                ig_key = f"ig_{(ctl.get('guidance') or {}).get('ig_scale', 1.78):.2f}"
                 if stats_ and ig_key in stats_ and "ig_1.00" in stats_:
                     note += (
                         f" Internal Guidance extrapolation inflates latent statistics: latent std is "
-                        f"{stats_[ig_key]['std']:.2f} with guidance, vs {stats_['ig_1.00']['std']:.2f} without it "
-                        f"and {stats_['real']['std']:.2f} for real FFHQ latents (`scripts/latent_stats.py`)."
+                        f"{stats_[ig_key]['std']:.2f} at IG {ig_key[3:]}, vs {stats_['ig_1.00']['std']:.2f} without "
+                        f"guidance and {stats_['real']['std']:.2f} for real FFHQ latents"
+                        + (
+                            f" ({stats_['ig_1.78']['std']:.2f} at the default 1.78)"
+                            if ig_key != "ig_1.78" and "ig_1.78" in stats_
+                            else ""
+                        )
+                        + " (`scripts/latent_stats.py`)."
                     )
                 note += " So the absolute percentages are approximate; the shift from the base-rate column is the controllable effect."
                 lines += [note, ""]
@@ -214,6 +249,13 @@ def build(runs: Path) -> str:
                     f"is {mt['gen_nn_sim_p50']:.2f} (p99 {mt['gen_nn_sim_p99']:.2f}), closer to the training-set "
                     f"statistics as the caveat predicts, and {mt['frac_gen_above_threshold']:.3%} of samples exceed "
                     f"the threshold."
+                )
+            mg = (ev.get("gan_fixed_1step") or {}).get("memorization")
+            if mg:
+                lines.append(
+                    f"- The fixed one-step GAN student: generated median {mg['gen_nn_sim_p50']:.2f} "
+                    f"(p99 {mg['gen_nn_sim_p99']:.2f}), and {mg['frac_gen_above_threshold']:.3%} of samples exceed "
+                    "the threshold."
                 )
             lines.append("")
             if Path("docs/assets/teacher_nearest_pairs.jpg").exists():

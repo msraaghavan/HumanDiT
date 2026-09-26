@@ -72,8 +72,13 @@ The G4 is 1.3 to 1.6 times faster but costs 1.68 times as much per hour, so the 
 | A100, bf16 (production policy) | 6.2e-2 / 2.5e-1 | 37.9 / 21.2 | 3.8e-3 |
 | G4, bf16 (production policy) | 6.1e-2 / 2.5e-1 | 37.8 / 23.0 | 3.8e-3 |
 
-- **The hardware does not change the results.** In fp32 the two GPUs agree to 85 dB. Under the production bf16 policy
-  both sit at the same distance from the reference.
+- **The hardware does not change the results at the level the metrics measure.**
+  - In fp32 the two GPUs agree to 85 dB.
+  - Under the production bf16 policy both sit at the same distance from the reference.
+  - In bf16 their samples are not bit-identical: A100 vs G4 differ by 2.2e-2 latent rel. error and 45.8 dB mean PSNR
+    (27.6 dB at worst). That is closer than either comes to fp32, because different kernels accumulate in a
+    different order.
+  - So GPU choice changes individual bf16 samples slightly, not the distribution.
 - **Side finding:** bf16 sampling, on either GPU, changes individual samples noticeably. The mean is 38 dB, but the
   worst of 64 seeds is 21 dB, because small errors compound over 50 ODE steps. So a seed's exact face depends on the
   precision policy. The 4090 runs used this same bf16 policy, so all reported metrics compare like with like.

@@ -33,14 +33,20 @@ Smiling and Mouth Open. Bald, Mustache and Wearing Necktie passed the CelebA acc
 - FID-50k vs FFHQ-256: **3.78** (clean) / 3.87 (legacy TF) at the tuned Internal Guidance scale 1.55, with
   FD_DINOv2 49.0, precision 0.819 and recall 0.680. The demo uses 1.55. At the pre-training default 1.78: 4.60 / 4.59,
   FD_DINOv2 62.4. The scale was tuned on FID-10k against the same reference, so 3.78 is not a held-out estimate.
-- Attribute control (measured at IG 1.78): 84.4% mean agreement of the DINOv3 probe with the requested attribute
-  state. The probe over-fires on generated latents, because guidance inflates latent statistics (std 1.37 vs 1.03
-  for real data; `scripts/latent_stats.py`), so treat absolute rates as approximate.
-- Memorisation: 0 of 10,000 samples exceeded the 99.9th-percentile training-to-training similarity at either
-  guidance scale. The most similar pairs show different people.
-- One-step students: W-Flow reaches FID-50k 23.0 with recall 0.163 (vs 0.683 for the teacher). It is 20× faster but
-  far less diverse, and it is the demo's real-time mode. The adversarial student collapsed (FID 207, recall 0). An
-  anchored retry fixed the collapse (FID 33.1, recall 0.155) but still trails W-Flow, so it is not used in the demo.
+- Attribute control at the tuned IG 1.55 (CFG 2.0): 89.9% mean agreement of the DINOv3 probe with the requested
+  attribute state (84.4% at the default 1.78). The probe over-fires on generated latents, because guidance inflates
+  latent statistics (std 1.18 at IG 1.55 and 1.36 at 1.78, vs 1.03 for real data; `scripts/latent_stats.py`), so
+  treat absolute rates as approximate.
+- Memorisation: 0 of 10,000 teacher samples exceeded the 99.9th-percentile training-to-training similarity at either
+  guidance scale, and neither did the fixed one-step GAN student. The most similar pairs show different people.
+- One-step students (1 network evaluation, 20× faster than the teacher, far less diverse):
+  - The fixed adversarial student is the best: FID-50k 20.0, FD_DINOv2 239, precision 0.728 and recall 0.339 (vs
+    0.680 for the teacher).
+  - W-Flow reaches FID 23.0, FD_DINOv2 376 and recall 0.163.
+  - The adversarial student's first run collapsed (FID 207, recall 0). An anchored retry reached FID 33.1. Both had
+    a discriminator noise-level bug; fixing it alone produced the 20.0.
+  - One training run each.
+  - The demo's real-time mode currently uses the W-Flow student.
 
 ## Known biases and limitations
 - FFHQ over-represents some age groups, ethnicities and photographic styles. Under-represented groups are likely to
