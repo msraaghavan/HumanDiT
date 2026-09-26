@@ -31,6 +31,9 @@ from pathlib import Path
 
 T0 = time.time()
 KAGGLE = Path("/kaggle/input").exists()
+GPU = shutil.which("nvidia-smi") is not None  # the same jobs also run on a CUDA GPU (no --tpu, no PJRT)
+# which stages to run: toy (rehearsal), check (platform agreement + speed, scripts/platform_check.py), real
+STAGES = os.environ.get("HUMANDIT_STAGES", "toy,real").split(",")
 BUDGET_H = 8.3  # Kaggle stops TPU sessions at 9 h (Colab: a local deadman); leave time to save outputs
 OUT = Path("/kaggle/working") if KAGGLE else Path("/content/humandit_out")
 INP = Path("/kaggle/input") if KAGGLE else Path("/content/inputs")
@@ -48,7 +51,7 @@ WORK = big_disk() / "humandit"
 REPO = WORK / "repo"
 ENV = {
     **os.environ,
-    "PJRT_DEVICE": "TPU",
+    **({} if GPU else {"PJRT_DEVICE": "TPU"}),
     "PYTHONPATH": str(REPO / "src"),
     "PYTHONUNBUFFERED": "1",
     "HUMANGEN_PRETRAINED": str(WORK / "pretrained" / "raev2"),
@@ -109,9 +112,9 @@ def setup() -> None:
         "imageio tensorboard 2>&1 | tail -2",
         check=False,
     )
-    sh(
-        "python -c 'import sys, torch, torch_xla; print(sys.version); print(torch.__version__, torch_xla.__version__)'"
-    )
+    sh("python -c 'import sys, torch; print(sys.version); print(torch.__version__, torch.version.cuda)'")
+    if not GPU:
+        sh("python -c 'import torch_xla; print(torch_xla.__version__)'")
 
 
 def jobs(toy: bool) -> list[tuple[str, str, list[str]]]:
@@ -136,7 +139,7 @@ def jobs(toy: bool) -> list[tuple[str, str, list[str]]]:
         ),
         (
             "gan",
-            f"python scripts/onestep.py gan --tpu --teacher {teacher} --cache {c}/ffhq256 --out {gan} "
+            f"python scripts/onestep.py gan{'' if GPU else ' --tpu'} --teacher {teacher} --cache {c}/ffhq256 --out {gan} "
             f"--gan-batch 64 --anchor-batch 32 --anchor-pairs {n(6144, 256)} --anchor-steps {n(25, 2)} "
             f"--max-steps {n(2053, 3)} --minutes 300 --sample-every {n(500, 1000)} --decode",
             [gan],
@@ -172,6 +175,15 @@ def jobs(toy: bool) -> list[tuple[str, str, list[str]]]:
     ]
 
 
+STATUS: dict[
+    str, str
+] = {}  # every job of every stage: "running" / "ok (x.x min)" / "FAILED (rc) ..." / "skipped ..."
+
+
+def save_status() -> None:
+    (OUT / "status.json").write_text(json.dumps(STATUS, indent=2))
+
+
 def run_stage(toy: bool) -> dict[str, str]:
     status, dead = {}, set()
     needs = {
@@ -192,8 +204,12 @@ def run_stage(toy: bool) -> dict[str, str]:
             status[tag] = "skipped (dependency failed)"
             dead.add(name)
             continue
+        STATUS[tag] = "running"
+        save_status()
+        t = time.time()
         rc = sh(cmd, logs / f"{tag}.log", check=False)
         status[tag] = "ok" if rc == 0 else f"FAILED ({rc})"
+        STATUS[tag] = f"{status[tag]} ({(time.time() - t) / 60:.1f} min)"
         if rc != 0:
             dead.add(name)
         for rel in keep:  # copy results out as soon as each job finishes (a later crash cannot lose them)
@@ -205,36 +221,72 @@ def run_stage(toy: bool) -> dict[str, str]:
                 else:
                     dst.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy(src, dst)
-        (OUT / "status.json").write_text(json.dumps(status, indent=2))
+        save_status()
+    for tag, s in status.items():
+        STATUS.setdefault(tag, s)  # skipped jobs
+    save_status()
     return status
 
 
+def run_check() -> bool:
+    """Platform agreement + speed (scripts/platform_check.py): the default precision policy with timings, and a
+    full-precision reference. Outputs go to OUT/check/{default,fp32}."""
+    images = glob.glob(str(INP / "**" / "fixed_images.npy"), recursive=True)
+    ok = bool(images)
+    for mode, flags in (("default", "--timing"), ("fp32", "--fp32")):
+        tag = f"check_{mode}"
+        STATUS[tag] = "running" if images else "FAILED (no fixed_images.npy)"
+        save_status()
+        if not images:
+            continue
+        t = time.time()
+        rc = sh(
+            f"python scripts/platform_check.py --ckpt runs/teacher_b/ckpt/ema.safetensors --images {images[0]} "
+            f"--out {OUT / 'check' / mode} {flags}",
+            OUT / "logs" / f"{tag}.log",
+            check=False,
+        )
+        STATUS[tag] = f"{'ok' if rc == 0 else f'FAILED ({rc})'} ({(time.time() - t) / 60:.1f} min)"
+        ok &= rc == 0
+        save_status()
+    return ok
+
+
 def pack() -> None:
-    """Colab: one archive of logs, status and results (weights excluded) for a single `colab download`."""
+    """Colab: one archive of logs, status and results for a single `colab download`. Weights and the platform-check
+    arrays stay out (the transfer API caps a file at ~50 MB); those are downloaded file by file."""
     if KAGGLE:
         return
     dst = OUT.parent / "humandit_results.tar.gz"
     with tarfile.open(dst, "w:gz") as t:
-        t.add(OUT, arcname=OUT.name, filter=lambda ti: None if ti.name.endswith(".safetensors") else ti)
+        t.add(
+            OUT,
+            arcname=OUT.name,
+            filter=lambda ti: None if ti.name.endswith((".safetensors", ".npy")) else ti,
+        )
     print(f"[driver] packed {dst} ({dst.stat().st_size / 1e6:.1f} MB)", flush=True)
 
 
 def main() -> None:
     setup()
-    toy = run_stage(toy=True)
-    print(json.dumps(toy, indent=2), flush=True)
-    if (
-        any(v != "ok" for v in toy.values())
-        or "--toy-only" in sys.argv
-        or os.environ.get("HUMANDIT_TOY_ONLY")
-    ):
-        print("[driver] rehearsal did not fully pass (or toy-only); not starting the real run", flush=True)
+    print(f"[driver] {'GPU' if GPU else 'TPU'}; stages {STAGES}", flush=True)
+    try:
+        if "toy" in STAGES:
+            toy = run_stage(toy=True)
+            print(json.dumps(toy, indent=2), flush=True)
+            if any(v != "ok" for v in toy.values()) or "--toy-only" in sys.argv:
+                print("[driver] rehearsal did not fully pass (or --toy-only); stopping here", flush=True)
+                return
+        if "check" in STAGES:
+            run_check()
+        if "real" in STAGES:
+            shutil.rmtree(OUT / "results", ignore_errors=True)  # keep only real results
+            run_stage(toy=False)
+        print(json.dumps(STATUS, indent=2), flush=True)
+    finally:
+        STATUS["driver"] = "done"
+        save_status()
         pack()
-        return
-    shutil.rmtree(OUT / "results", ignore_errors=True)  # keep only real results
-    real = run_stage(toy=False)
-    print(json.dumps({**toy, **real}, indent=2), flush=True)
-    pack()
 
 
 if __name__ == "__main__":
