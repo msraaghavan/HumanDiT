@@ -1,8 +1,9 @@
-"""HumanDiT follow-up runs on a Kaggle TPU v5e-8 (torch_xla). Pushed as a Kaggle script kernel.
+"""HumanDiT follow-up runs on a TPU (torch_xla): a Kaggle TPU v5e-8 script kernel, or a Colab TPU runtime
+(v6e-1 / v5e-1) driven by the Colab CLI (`colab exec -f` this file).
 
-Inputs (private Kaggle datasets): humandit-code (this repo at a commit, as humandit-code.tar.gz) and humandit-weights
-(teacher EMA, attribute probe + report, real FFHQ DINOv2 statistics). Internet is used for FFHQ-256 and the RAEv2 /
-DINOv2 / clean-fid weights.
+Inputs: humandit-code.tar.gz (this repo at a commit) plus the weights (teacher EMA, attribute probe + report, real FFHQ
+DINOv2 statistics). On Kaggle they are private datasets under /kaggle/input; on Colab they are uploaded to
+/content/inputs. Internet is used for FFHQ-256 and the RAEv2 / DINOv2 / clean-fid weights.
 
 Stage 1 rehearses every job at toy size; stage 2 (the real run) starts only if all of stage 1 passed, so a porting
 bug costs minutes of TPU quota, not hours. Jobs:
@@ -29,13 +30,15 @@ import time
 from pathlib import Path
 
 T0 = time.time()
-BUDGET_H = 8.3  # Kaggle TPU sessions stop at 9 h; leave time for outputs to be saved
-OUT = Path("/kaggle/working")
-INP = Path("/kaggle/input")
+KAGGLE = Path("/kaggle/input").exists()
+BUDGET_H = 8.3  # Kaggle stops TPU sessions at 9 h (Colab: a local deadman); leave time to save outputs
+OUT = Path("/kaggle/working") if KAGGLE else Path("/content/humandit_out")
+INP = Path("/kaggle/input") if KAGGLE else Path("/content/inputs")
+OUT.mkdir(parents=True, exist_ok=True)
 
 
 def big_disk() -> Path:
-    cands = [Path(p) for p in ("/kaggle/temp", "/tmp", "/root", str(OUT)) if Path(p).exists()]
+    cands = [Path(p) for p in ("/kaggle/temp", "/content", "/tmp", "/root", str(OUT)) if Path(p).exists()]
     best = max(cands, key=lambda p: shutil.disk_usage(p).free)
     print(f"[driver] work disk {best}: {shutil.disk_usage(best).free / 1e9:.0f} GB free", flush=True)
     return best
@@ -203,16 +206,32 @@ def run_stage(toy: bool) -> dict[str, str]:
     return status
 
 
+def pack() -> None:
+    """Colab: one archive of logs, status and results (weights excluded) for a single `colab download`."""
+    if KAGGLE:
+        return
+    dst = OUT.parent / "humandit_results.tar.gz"
+    with tarfile.open(dst, "w:gz") as t:
+        t.add(OUT, arcname=OUT.name, filter=lambda ti: None if ti.name.endswith(".safetensors") else ti)
+    print(f"[driver] packed {dst} ({dst.stat().st_size / 1e6:.1f} MB)", flush=True)
+
+
 def main() -> None:
     setup()
     toy = run_stage(toy=True)
     print(json.dumps(toy, indent=2), flush=True)
-    if any(v != "ok" for v in toy.values()) or "--toy-only" in sys.argv:
-        print("[driver] rehearsal did not fully pass (or --toy-only); not starting the real run", flush=True)
+    if (
+        any(v != "ok" for v in toy.values())
+        or "--toy-only" in sys.argv
+        or os.environ.get("HUMANDIT_TOY_ONLY")
+    ):
+        print("[driver] rehearsal did not fully pass (or toy-only); not starting the real run", flush=True)
+        pack()
         return
     shutil.rmtree(OUT / "results", ignore_errors=True)  # keep only real results
     real = run_stage(toy=False)
     print(json.dumps({**toy, **real}, indent=2), flush=True)
+    pack()
 
 
 if __name__ == "__main__":
