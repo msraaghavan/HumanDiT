@@ -10,6 +10,8 @@ from dataclasses import dataclass
 
 import torch
 
+from humangen.utils.device import sync
+
 ModelFn = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]  # (x_t, t) -> x̂ (clean prediction)
 
 
@@ -83,9 +85,11 @@ class Transport:
                 traj.append(x_hat)
             v = self.x_to_v(x_hat, x, tb)
             x_next = x + (t_next - t_cur) * v
-            if method == "heun" and t_next > 0:
+            if method == "heun" and i + 1 < num_steps:  # the grid ends exactly at t = 0
                 tn = t_next.expand(x.shape[0])
                 v2 = self.x_to_v(model_fn(x_next, tn), x_next, tn)
                 x_next = x + (t_next - t_cur) * 0.5 * (v + v2)
             x = x_next
+            if x.device.type == "xla":  # one graph per ODE step, compiled once and reused
+                sync(x.device)
         return (x, traj) if return_trajectory else x

@@ -159,7 +159,10 @@ def main() -> None:
             print(f"[eval] FD_DINOv2 = {result['fd_dinov2']}", flush=True)
         if "pr" in metrics:
             m = min(len(g), len(sub_r), 10000)
-            pr = knn_precision_recall(torch.from_numpy(sub_r[:m]).to(dev), torch.from_numpy(g[:m]).to(dev))
+            pr_dev = dev if dev.type == "cuda" else torch.device("cpu")  # kthvalue/cdist: CPU on TPU hosts
+            pr = knn_precision_recall(
+                torch.from_numpy(sub_r[:m]).to(pr_dev), torch.from_numpy(g[:m]).to(pr_dev)
+            )
             result.update({k2: round(v, 4) for k2, v in pr.items()})
             print(f"[eval] precision {pr['precision']:.3f} recall {pr['recall']:.3f}", flush=True)
         del dino
@@ -176,6 +179,10 @@ def main() -> None:
                     dataset_split="trainval70k",
                     mode=mode,
                     num_workers=workers,
+                    device=dev
+                    if dev.type == "cuda"
+                    else torch.device("cpu"),  # TPU: Inception on the host CPU
+                    use_dataparallel=False,
                     verbose=False,
                 ),
                 3,

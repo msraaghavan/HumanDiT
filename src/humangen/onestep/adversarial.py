@@ -48,7 +48,7 @@ class TrunkDiscriminator(nn.Module):
         for i, blk in enumerate(self.trunk):
             # G step: gradients flow through the frozen trunk into the student, so recompute its activations
             # instead of storing them (a 24 GB GPU cannot hold both models' activations at batch 64 in eager mode).
-            if torch.is_grad_enabled() and seq.requires_grad:
+            if torch.is_grad_enabled() and seq.requires_grad and seq.device.type != "xla":
                 seq = checkpoint(blk, seq, self.rope, use_reentrant=False)
             else:
                 seq = blk(seq, self.rope)
@@ -82,12 +82,12 @@ def d_loss(
     xf, tf = renoise(fake.detach(), transport)
     lr_, lf = d(xr, tr, real_attrs), d(xf, tf, fake_attrs)
     loss = F.softplus(-lr_).mean() + F.softplus(lf).mean()
-    info = {"d_real": float(lr_.detach().mean()), "d_fake": float(lf.detach().mean())}
+    info = {"d_real": lr_.detach().mean(), "d_fake": lf.detach().mean()}  # tensors: no host sync per step
     if r1_weight > 0:  # approximated R1: || D(x) - D(x + sigma*eps) ||^2 on real inputs
         pert = d(xr + r1_sigma * torch.randn_like(xr), tr, real_attrs)
         r1 = (pert - lr_).pow(2).mean()
         loss = loss + r1_weight * r1
-        info["r1"] = float(r1.detach())
+        info["r1"] = r1.detach()
     return loss, info
 
 

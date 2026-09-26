@@ -48,7 +48,7 @@ def wflow_loss(
     pos: torch.Tensor,
     r_list: Iterable[float] = (0.02, 0.05, 0.2),
     iters: int = 20,
-) -> tuple[torch.Tensor, dict[str, float]]:
+) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     """gen [B,N,D] (requires grad), pos [B,M,D] real features, per independent OT group B.
 
     V = T_{q->p}(x) - T_{q->q}(x) (self-map with the diagonal masked, i.e. the debiased estimator),
@@ -71,7 +71,7 @@ def wflow_loss(
                 old_s, old_s, reg, iters, True
             )
             f = v.pow(2).mean()
-            info[f"v_rms_{r}"] = float(f.sqrt())
+            info[f"v_rms_{r}"] = f.sqrt()
             v_agg += v / f.sqrt().clamp_min(1e-4)
         goal = old_s + v_agg
     loss = (gen / scale_in - goal).pow(2).mean()
@@ -106,5 +106,5 @@ def grouped_wflow_loss(
         loss, inf = wflow_loss(g, p, **kw)
         total = total + loss
         info.update({f"{name}/{k}": v for k, v in inf.items()})
-        info[f"{name}/loss"] = float(loss.detach())
+        info[f"{name}/loss"] = loss.detach()
     return total, info

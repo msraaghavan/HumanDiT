@@ -2,11 +2,13 @@
 
 Measured on the GTX 1650 Ti (sm_75): fp16 GEMM is 4x *slower* than fp32 and bf16 is emulated,
 so pre-Ampere GPUs run in fp32. Ampere+ (sm >= 80) uses bf16 autocast with TF32 matmuls.
+TPUs (torch_xla, opted in with PJRT_DEVICE=TPU or HUMANGEN_DEVICE=xla) use bf16 autocast.
 """
 
 from __future__ import annotations
 
 import contextlib
+import os
 from dataclasses import dataclass
 
 import torch
@@ -27,7 +29,22 @@ class Precision:
         return torch.autocast(self.device.type, dtype=self.autocast_dtype)
 
 
+def xla_device() -> torch.device | None:
+    """The TPU, if torch_xla is installed and a TPU runtime was requested; otherwise None."""
+    wanted = os.environ.get("HUMANGEN_DEVICE", "").lower() == "xla" or os.environ.get("PJRT_DEVICE") == "TPU"
+    if not wanted:
+        return None
+    try:
+        import torch_xla
+    except ImportError:
+        return None
+    return torch_xla.device()
+
+
 def get_precision(force: str | None = None) -> Precision:
+    xdev = xla_device()
+    if xdev is not None:
+        return Precision(xdev, None if force == "fp32" else torch.bfloat16)
     if not torch.cuda.is_available():
         return Precision(torch.device("cpu"), None)
     dev = torch.device("cuda")
@@ -39,3 +56,35 @@ def get_precision(force: str | None = None) -> Precision:
     if force == "bf16" or (force is None and major >= 8):
         return Precision(dev, torch.bfloat16)
     return Precision(dev, None)
+
+
+def world() -> tuple[int, int]:
+    """(rank, world size) of an XLA data-parallel run (one process per TPU chip); (0, 1) everywhere else."""
+    if xla_device() is None:
+        return 0, 1
+    import torch_xla.runtime as xr
+
+    return xr.global_ordinal(), xr.world_size()
+
+
+def average_gradients(params, device: torch.device) -> None:
+    """Data parallel: replace each gradient by its mean over TPU replicas. No-op on a single device."""
+    if device.type != "xla":
+        return
+    import torch_xla.core.xla_model as xm
+    import torch_xla.runtime as xr
+
+    if xr.world_size() > 1:
+        grads = [p.grad for p in params if p.grad is not None]
+        xm.all_reduce(xm.REDUCE_SUM, grads, scale=1.0 / xr.world_size())
+
+
+def sync(device: torch.device) -> None:
+    """Finish queued work. CUDA: wait for kernels. XLA: cut the lazily traced graph here and run it, so loops
+    (ODE steps, optimizer steps) compile one small reusable graph instead of one giant unrolled one."""
+    if device.type == "cuda":
+        torch.cuda.synchronize(device)
+    elif device.type == "xla":
+        import torch_xla
+
+        torch_xla.sync()
