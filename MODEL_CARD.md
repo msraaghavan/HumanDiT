@@ -32,7 +32,8 @@ Smiling and Mouth Open. Bald, Mustache and Wearing Necktie passed the CelebA acc
 ## Measured performance (teacher, 50-step sampling, Internal Guidance 1.78; details in the README)
 - FID-50k vs FFHQ-256: **4.60** (clean) / 4.59 (legacy TF). FD_DINOv2 62.4, precision 0.787, recall 0.683.
 - Attribute control: 84.4% mean agreement of the DINOv3 probe with the requested attribute state. The probe
-  over-fires on generated latents, because guidance inflates latent statistics (std 1.34 vs 1.03 for real data), so
+  over-fires on generated latents, because guidance inflates latent statistics (std 1.37 vs 1.03 for real data;
+  `scripts/latent_stats.py`), so
   treat absolute rates as approximate.
 - Memorisation: 0 of 10,000 samples exceeded the 99.9th-percentile training-to-training similarity. The most similar
   pairs show different people.
