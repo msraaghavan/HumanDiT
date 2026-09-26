@@ -122,6 +122,15 @@ def build(runs: Path) -> str:
             if Path("docs/assets/teacher_nearest_pairs.jpg").exists():
                 lines += ["![most similar generated (top) vs training (bottom)](docs/assets/teacher_nearest_pairs.jpg)", ""]
     lines += _ablations(runs / "eval_extra")
+    wm = _load(runs / "eval" / "watermark.json")
+    if wm:
+        r = wm["recovery"]
+        lines += [f"### Invisible watermark on every demo output ({wm['method']}, {wm['n_marked']} generated faces)", "",
+                  "| PNG | JPEG q75 | JPEG q50 | 2× down/up-scale | 90% centre crop | PSNR | false positives (real / unmarked) |",
+                  "|---|---|---|---|---|---|---|",
+                  f"| {r['png']:.0%} | {r['jpeg_q75']:.0%} | {r['jpeg_q50']:.1%} | {r['downscale_2x_upscale']:.0%} | "
+                  f"{r['center_crop_90pct']:.0%} | {wm['psnr_db_mean']:.1f} dB | "
+                  f"{wm['false_positive_rate_real_ffhq']:.0%} / {wm['false_positive_rate_unmarked_generated']:.0%} |", ""]
     gate = _load(runs / "rae_gate" / "metrics.json")
     if gate:
         lines += ["### RAEv2 decoder on faces (reconstruction gate)", "",

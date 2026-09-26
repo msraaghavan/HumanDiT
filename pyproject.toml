@@ -32,6 +32,7 @@ demo = [
     "onnx>=1.20",
     "onnxruntime>=1.30",
     "onnxscript>=0.5",
+    "trustmark>=0.9",
 ]
 
 [dependency-groups]

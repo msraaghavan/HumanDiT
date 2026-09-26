@@ -33,8 +33,7 @@ Smiling and Mouth Open. Bald, Mustache and Wearing Necktie passed the CelebA acc
 - FID-50k vs FFHQ-256: **4.60** (clean) / 4.59 (legacy TF). FD_DINOv2 62.4, precision 0.787, recall 0.683.
 - Attribute control: 84.4% mean agreement of the DINOv3 probe with the requested attribute state. The probe
   over-fires on generated latents, because guidance inflates latent statistics (std 1.37 vs 1.03 for real data;
-  `scripts/latent_stats.py`), so
-  treat absolute rates as approximate.
+  `scripts/latent_stats.py`), so treat absolute rates as approximate.
 - Memorisation: 0 of 10,000 samples exceeded the 99.9th-percentile training-to-training similarity. The most similar
   pairs show different people.
 
@@ -45,7 +44,15 @@ Smiling and Mouth Open. Bald, Mustache and Wearing Necktie passed the CelebA acc
 - Quality is measured with FID, FD_DINOv2 and precision/recall, which capture only part of perceptual quality.
 
 ## Safety measures
-- An invisible DWT-DCT watermark and "AI-generated" PNG metadata are added to every demo output, and the demo includes a watermark checker.
+- Every demo output carries an invisible TrustMark watermark (Adobe, MIT licence, the neural watermark used in the
+  Content Credentials ecosystem) and "AI-generated" PNG metadata, and the demo includes a watermark checker. Measured on
+  64 generated faces (`scripts/watermark_eval.py`):
+  - recovered after 100% of PNG, JPEG q75, 2× rescaling and 90% crops, and 95% of JPEG q50;
+  - PSNR 43 dB;
+  - 0 false positives on 64 real and 64 unmarked faces.
+
+  A determined adversary can still remove it. The first implementation (DWT-DCT, invisible-watermark 0.2) failed
+  this check (0 of 6 recovered) and was replaced.
 - A memorisation audit compares 10k samples with all 70k training faces in DINOv3 space; results are in the README.
 
 ## Licences of components
