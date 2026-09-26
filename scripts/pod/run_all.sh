@@ -77,6 +77,8 @@ fi
 stage() {  # stage <name> <command...>
   local name=$1; shift
   if [ -f "$STATE/$name.done" ]; then echo "[run_all] skip $name"; return; fi
+  # Operator switch: `touch $STATE/pause` stops cleanly before the next stage (used to ship code mid-run).
+  if [ -f "$STATE/pause" ]; then echo "[run_all] paused before $name"; rm -f "$STATE/pause"; exit 0; fi
   echo "[run_all] >>> $name  ($(date -u +%H:%M:%S))"
   "$@" 2>&1 | tee -a "$LOGS/$name.log"
   touch "$STATE/$name.done"
@@ -115,7 +117,7 @@ stage package bash -c "cd '$KEEP' && tar czf results.tar.gz --exclude='*.pt' --e
 if [ "${EXTRAS:-0}" = 1 ]; then
   if [ "$DRY" = 1 ]; then XN="--n 48 --batch 16"; else XN="--n 10000 --batch 250"; fi
   XEV="--data $DATA/ffhq-256 --cache $CACHE/ffhq256 --probe $CACHE/attribute_probe.pt --out $RUNS/eval_extra --metrics fid $XN"
-  for m in wflow gan; do for s in 1 2 4; do
+  for m in wflow; do for s in 1 2 4; do  # the first GAN student collapsed (see README), so only W-Flow is swept
     stage x_${m}_${s}step $PY scripts/evaluate.py --ckpt "$RUNS/student_$m/student.safetensors" --kind student \
       --tag ${m}_${s}step_10k $XEV --steps $s
   done; done
