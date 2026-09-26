@@ -25,6 +25,18 @@ The probe abstains when uncertain: thresholds are calibrated on CelebA validatio
 "Attractive") and skin tone are excluded. CelebA's binary "Male" label is a simplification of gender presentation
 and does not represent gender identity.
 
+The 12 attributes are Male, Eyeglasses, Hat, Goatee, Sideburns, Beard, Lipstick, Gray Hair, Bangs, Blond Hair,
+Smiling and Mouth Open. Bald, Mustache and Wearing Necktie passed the CelebA accuracy bar but were dropped: fewer than
+0.5% of FFHQ faces reach the 90%-precision threshold for them, so the generator could not learn them.
+
+## Measured performance (teacher, 50-step sampling, Internal Guidance 1.78; details in the README)
+- FID-50k vs FFHQ-256: **4.60** (clean) / 4.59 (legacy TF). FD_DINOv2 62.4, precision 0.787, recall 0.683.
+- Attribute control: 84.4% mean agreement of the DINOv3 probe with the requested attribute state. The probe
+  over-fires on generated latents, because guidance inflates latent statistics (std 1.34 vs 1.03 for real data), so
+  treat absolute rates as approximate.
+- Memorisation: 0 of 10,000 samples exceeded the 99.9th-percentile training-to-training similarity. The most similar
+  pairs show different people.
+
 ## Known biases and limitations
 - FFHQ over-represents some age groups, ethnicities and photographic styles. Under-represented groups are likely to
   be generated with lower fidelity and less often. We report unconditional attribute base rates in the README.
