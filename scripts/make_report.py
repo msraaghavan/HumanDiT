@@ -45,21 +45,26 @@ def _ablations(d: Path) -> list[str]:
             "FID-10k is biased upwards relative to FID-50k; compare within this table only.",
             "",
         ]
+    # Step sweeps: teacher rows are grouped by guidance scale (read from each JSON). The IG sweep's 50-step points
+    # join a group only when that scale also has a step sweep (the 1.78 default and the tuned scale).
+    teacher_rows = {k: r for k, r in x.items() if k.startswith("teacher")}
+    swept = {
+        round(r["guidance"]["ig_scale"], 2) for k, r in teacher_rows.items() if not k.startswith("teacher_ig")
+    }
     nfe = []
     for k, r in x.items():
-        if k.startswith("teacher_ig") and abs(r["guidance"]["ig_scale"] - 1.78) > 1e-6:
+        g = round(r["guidance"]["ig_scale"], 2)
+        if k.startswith("teacher"):
+            if k.startswith("teacher_ig") and g not in swept:
+                continue
+            name = f"Teacher (IG {g:.2f})"
+        elif k.startswith("wflow"):
+            name = "W-Flow student"
+        elif k.startswith("gan"):
+            name = "GAN student"
+        else:
             continue
-        name = (
-            "Teacher (IG 1.78)"
-            if k.startswith("teacher")
-            else "W-Flow student"
-            if k.startswith("wflow")
-            else "GAN student"
-            if k.startswith("gan")
-            else None
-        )
-        if name:
-            nfe.append((name, r["steps"], r["fid_clean"]))
+        nfe.append((name, r["steps"], r["fid_clean"]))
     if nfe:
         lines += [
             "### Quality vs network evaluations (FID-10k clean)",
@@ -69,13 +74,19 @@ def _ablations(d: Path) -> list[str]:
         ]
         lines += [f"| {n} | {s} | {f:.2f} |" for n, s, f in sorted(nfe)]
         lines.append("")
-        teach = sorted((s, f) for n, s, f in nfe if n.startswith("Teacher"))
-        best = min(teach, key=lambda v: v[1]) if teach else None
-        if best and teach[-1][0] > best[0]:
+        for g in sorted(swept):
+            teach = sorted((s, f) for n, s, f in nfe if n == f"Teacher (IG {g:.2f})")
+            best = min(teach, key=lambda v: v[1]) if teach else None
+            if best and teach[-1][0] > best[0]:
+                lines += [
+                    f"With IG {g:.2f}, {best[0]} steps score better than {teach[-1][0]} "
+                    f"({best[1]:.2f} vs {teach[-1][1]:.2f}).",
+                    "",
+                ]
+        if len(swept) == 1 and 1.78 in swept:
             lines += [
-                f"With IG 1.78, {best[0]} steps score better than {teach[-1][0]} ({best[1]:.2f} vs {teach[-1][1]:.2f}). "
-                "Together with the guidance sweep, this suggests 1.78 over-guides; the step count at the tuned scale "
-                "was not swept.",
+                "Together with the guidance sweep, this suggests 1.78 over-guides; the step count at the tuned "
+                "scale was not swept.",
                 "",
             ]
     return lines

@@ -16,7 +16,7 @@ from huggingface_hub import HfApi, hf_hub_download
 
 from humangen.data.cache import CacheSpec, build_cache
 from humangen.rae import RAE, ensure_weights
-from humangen.utils.device import get_precision
+from humangen.utils.device import full_precision_matmuls, get_precision
 
 FFHQ_REPO = "merkol/ffhq-256"
 CELEBA_REPO = "flwrlabs/celeba"
@@ -52,6 +52,7 @@ def main() -> None:
     args = ap.parse_args()
 
     prec = get_precision()
+    full_precision_matmuls(prec.device)  # TPU: the encoder must not run as single-pass bf16
     ensure_weights()
     rae = RAE(load_decoder=False).to(prec.device)
     batch = args.batch or (64 if prec.autocast_dtype is not None else 8)

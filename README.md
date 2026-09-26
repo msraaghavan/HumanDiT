@@ -92,7 +92,9 @@ FID-10k is biased upwards relative to FID-50k; compare within this table only.
 | W-Flow student | 2 | 28.47 |
 | W-Flow student | 4 | 34.80 |
 
-With IG 1.78, 25 steps score better than 50 (4.65 vs 6.08). Together with the guidance sweep, this suggests 1.78 over-guides; the step count at the tuned scale was not swept.
+With IG 1.78, 25 steps score better than 50 (4.65 vs 6.08).
+
+Together with the guidance sweep, this suggests 1.78 over-guides; the step count at the tuned scale was not swept.
 
 ### CPU-only deployment (ONNX Runtime, laptop CPU, batch 1)
 

@@ -133,14 +133,16 @@ def build_cache(
     # tracked conservatively as the count of rows written (a set of indices would also work).
     written = np.zeros(n, dtype=bool)
     written[:done] = True
+    dev = next(rae.encoder.model.parameters()).device
     dl = DataLoader(
         _ShardRows(spec, offsets, done, n),
         batch_size=batch_size,
         num_workers=num_workers,
         collate_fn=_collate,
         pin_memory=torch.cuda.is_available(),
+        # forking after the TPU runtime has started can deadlock its threads; spawn clean workers instead
+        multiprocessing_context="spawn" if dev.type == "xla" and num_workers > 0 else None,
     )
-    dev = next(rae.encoder.model.parameters()).device
     t0, last = time.perf_counter(), 0.0
     for idx, imgs, lbl in dl:
         x = imgs.to(dev, non_blocking=True).permute(0, 3, 1, 2).float() / 255.0

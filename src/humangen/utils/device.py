@@ -58,6 +58,22 @@ def get_precision(force: str | None = None) -> Precision:
     return Precision(dev, None)
 
 
+def full_precision_matmuls(device: torch.device) -> None:
+    """TPUs run fp32 matmuls as one bf16 pass by default; request true fp32 (6-pass) accuracy. The latent
+    encoder needs it: the RAEv2 latent statistics were fit on full-precision features."""
+    if device.type != "xla":
+        return
+    torch.set_float32_matmul_precision("highest")
+    try:
+        import torch_xla.backends
+
+        torch_xla.backends.set_mat_mul_precision("highest")
+    except (ImportError, AttributeError):  # older torch_xla
+        import torch_xla
+
+        torch_xla._XLAC._xla_set_mat_mul_precision("highest")
+
+
 def world() -> tuple[int, int]:
     """(rank, world size) of an XLA data-parallel run (one process per TPU chip); (0, 1) everywhere else."""
     if xla_device() is None:
