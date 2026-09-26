@@ -59,7 +59,8 @@ def usage() -> tuple[float | None, float | None]:
 
 def sessions() -> list[str]:
     _, out = colab("sessions")
-    return [m for m in re.findall(r"^\[([^\]]+)\]", out, re.M) if m != "?"]
+    # session lines look like "[name] <assignment> | Hardware: ..."; the CLI's own "[colab] ..." messages do not
+    return [m for m in re.findall(r"^\[([^\]]+)\].*\| Hardware:", out, re.M) if m != "?"]
 
 
 def session_status(name: str) -> tuple[str, str]:
