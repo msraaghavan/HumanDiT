@@ -122,6 +122,19 @@ def build(runs: Path) -> str:
             if Path("docs/assets/teacher_nearest_pairs.jpg").exists():
                 lines += ["![most similar generated (top) vs training (bottom)](docs/assets/teacher_nearest_pairs.jpg)", ""]
     lines += _ablations(runs / "eval_extra")
+    ox = _load(runs / "eval" / "onnx_export.json")
+    if ox:
+        g, d, tq = ox["generator_1step"], ox["decoder"], ox.get("torch_cpu_ms_per_face", {})
+        lines += ["### CPU-only deployment (ONNX Runtime, laptop CPU, batch 1)", "",
+                  "| Graph | max abs error vs PyTorch | ONNX Runtime ms/face | eager PyTorch ms/face | size |",
+                  "|---|---|---|---|---|",
+                  f"| 1-step generator | {g['max_abs_diff']:.1e} | {g['cpu_ms_per_face']:.0f} | {tq.get('generator_1step', 0):.0f} | {g['mb']:.0f} MB |",
+                  f"| RAEv2 decoder | {d['max_abs_diff']:.1e} | {d['cpu_ms_per_face']:.0f} | {tq.get('decoder', 0):.0f} | {d['mb']:.0f} MB |"]
+        q = ox.get("decoder_int8")
+        if q:
+            lines.append(f"| decoder, {q['method']} | PSNR {q['psnr_vs_fp32_db']:.1f} dB vs fp32 | {q['cpu_ms_per_face']:.0f} | – | {q['mb']:.0f} MB |")
+        lines += ["", "Dynamic int8 (activations quantised too) broke the ViT-XL decoder in testing (9–11 dB): its activation "
+                  "outliers need per-block weight-only quantisation. Weight-only int8 is 3.5× smaller but not faster on this CPU.", ""]
     wm = _load(runs / "eval" / "watermark.json")
     if wm:
         r = wm["recovery"]
