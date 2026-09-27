@@ -25,10 +25,11 @@ Jobs of the fix stage (the fixed GAN lost facial hair; scripts/control_diagnosis
     encode, label   as above
     warm            download the clean-fid reference statistics and Inception once (two jobs share the GPU)
     teacher25       teacher, IG 1.55, 25 steps: FID-50k, FD_DINOv2, precision/recall (in the background)
+    dcheck          gate: train only the discriminator heads (old and attribute-aware D) and test on held-out
+                    real latents whether D can tell a true attribute from a flipped one; exit 1 skips gan_attrd
     gan_attrd       GAN with an attribute-aware discriminator (attribute-token heads + matching-aware term), same
                     data, anchors, batch and steps as the fixed GAN, logging control rates every 125 steps
-    gan_anchoronly  ablation: the same run with the adversarial term off (anchors only)
-    eval_*          each student: FID-50k, FD_DINOv2, precision/recall, control, memorisation
+    eval_attrd      that student: FID-50k, FD_DINOv2, precision/recall, control, memorisation
 """
 
 from __future__ import annotations
@@ -221,7 +222,15 @@ def fix_jobs(toy: bool) -> list[tuple[str, str, list[str]]]:
             [ev],
         ),
     ]
-    for name, flags in (("attrd", "--d-attr-heads --d-mismatch 1"), ("anchoronly", "--adv-weight 0")):
+    out.append(  # gate: train only D's heads and check that it can see a missing attribute (exit 1 = no)
+        (
+            "dcheck",
+            f"python scripts/check_discriminator.py --teacher {teacher} --cache {c}/ffhq256 "
+            f"--out {ev}/discriminator_check.json" + (" --steps 3 --heldout 64 --min-acc 0" if toy else ""),
+            [ev],
+        )
+    )
+    for name, flags in (("attrd", "--d-attr-heads --d-mismatch 1"),):
         run = f"runs/student_gan_{name}{'_toy' if toy else ''}"
         out.append(
             (
@@ -275,10 +284,9 @@ def run_stage(toy: bool, which: str = "real") -> dict[str, str]:
         "eval": {"gan"},
         "control": {"encode"},
         "stats": {"encode"},
-        "gan_attrd": {"encode", "label"},
+        "dcheck": {"encode", "label"},
+        "gan_attrd": {"encode", "label", "dcheck"},  # no student training unless the D check passed
         "eval_attrd": {"gan_attrd"},
-        "gan_anchoronly": {"encode", "label"},
-        "eval_anchoronly": {"gan_anchoronly"},
     }
     logs = OUT / "logs"
     logs.mkdir(exist_ok=True)
