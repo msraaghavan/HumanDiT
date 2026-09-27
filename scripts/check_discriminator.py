@@ -67,7 +67,7 @@ def evaluate(disc, teacher, ev_x, ev_a, names, transport, t_val: float) -> dict:
         rows = ev_a[:, j] != AttributeTokens.NULL
         if rows.sum() >= 16:
             s_flip = score(disc, xt, t, flip(ev_a, j))
-            per[name] = round(float((s_true[rows] > s_flip[rows]).float().mean()), 3)
+            per[name] = round(prefer(s_true[rows], s_flip[rows]), 3)
     # the student at initialisation (the teacher, one step from t = 1) under the same conditions and noise level
     zf = torch.randn(ev_x.shape, device=dev, generator=g)
     ones = torch.ones(len(zf), device=dev)
@@ -82,8 +82,13 @@ def evaluate(disc, teacher, ev_x, ev_a, names, transport, t_val: float) -> dict:
         "flip_accuracy": per,
         "facial_hair_flip_accuracy": round(float(np.mean([per[n] for n in WATCH if n in per])), 3),
         "all_attributes_flip_accuracy": round(float(np.mean(list(per.values()))), 3),
-        "real_vs_fake_accuracy": round(float((s_true > s_fake).float().mean()), 3),
+        "real_vs_fake_accuracy": round(prefer(s_true, s_fake), 3),
     }
+
+
+def prefer(a: torch.Tensor, b: torch.Tensor) -> float:
+    """How often a scores above b; ties count half (a D that cannot see an attribute gives ties, not wins)."""
+    return float(((a > b).float() + 0.5 * (a == b).float()).mean())
 
 
 def main() -> None:
@@ -132,8 +137,12 @@ def main() -> None:
             opt.zero_grad(set_to_none=True)
             ld.backward()
             opt.step()
-        with prec.autocast():
-            scores = {f"t={t}": evaluate(disc, teacher, ev_x, ev_a, names, transport, t) for t in (0.1, 0.4)}
+        tf32 = torch.backends.cuda.matmul.allow_tf32
+        torch.backends.cuda.matmul.allow_tf32 = (
+            False  # score in full fp32: bf16/TF32 rounding would create ties
+        )
+        scores = {f"t={t}": evaluate(disc, teacher, ev_x, ev_a, names, transport, t) for t in (0.1, 0.4)}
+        torch.backends.cuda.matmul.allow_tf32 = tf32
         result["variants"][label] = {**scores, "seconds": round(time.perf_counter() - t0, 1)}
         print(f"[dcheck] {label}: {json.dumps(scores)}", flush=True)
         del disc, opt

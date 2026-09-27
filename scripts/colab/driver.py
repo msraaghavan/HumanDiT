@@ -207,10 +207,10 @@ def fix_jobs(toy: bool) -> list[tuple[str, str, list[str]]]:
         ("label", *base["label"]),
         (
             "warm",
-            "python -c 'import torch; from humangen.eval.metrics import cleanfid; fid, _ = cleanfid(); "
-            '[fid.get_reference_statistics("ffhq", 256, mode=m, split="trainval70k") '
+            "(for i in 1 2 3; do python -c 'import torch; from humangen.eval.metrics import cleanfid; "
+            'fid, _ = cleanfid(); [fid.get_reference_statistics("ffhq", 256, mode=m, split="trainval70k") '
             'for m in ("clean", "legacy_tensorflow")]; '
-            'fid.build_feature_extractor("clean", torch.device("cuda"))\''
+            'fid.build_feature_extractor("clean", torch.device("cuda"))\' && exit 0; sleep 30; done; exit 1)'
             if GPU
             else "true",
             [],
