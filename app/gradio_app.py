@@ -34,8 +34,8 @@ from humangen.utils.device import get_precision
 STATE = {"any": AttributeTokens.NULL, "yes": AttributeTokens.YES, "no": AttributeTokens.NO}
 # Internal Guidance scale for the teacher: the FID-10k sweep winner (1.55 -> FID-50k 3.78 vs 4.60 at the 1.78 default).
 IG_TUNED = 1.55
-# Teacher ODE steps: at IG 1.55, 25 steps beat 50 on FID-10k (4.79 vs 5.23) at half the cost. The headline FID-50k
-# (3.78) was scored at 50 steps.
+# Teacher ODE steps: at IG 1.55, 25 steps beat 50 on FID-10k (4.79 vs 5.23) and on FID-50k (3.41 vs 3.78) at half
+# the cost.
 TEACHER_STEPS = 25
 STUDENT_KINDS = {"gan": "GAN", "wflow": "W-Flow"}
 # eval file of each student checkpoint directory, for the measured score shown next to it

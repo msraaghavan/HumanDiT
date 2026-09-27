@@ -29,10 +29,13 @@ The 12 attributes are Male, Eyeglasses, Hat, Goatee, Sideburns, Beard, Lipstick,
 Smiling and Mouth Open. Bald, Mustache and Wearing Necktie passed the CelebA accuracy bar but were dropped: fewer than
 0.5% of FFHQ faces reach the 90%-precision threshold for them, so the generator could not learn them.
 
-## Measured performance (teacher, 50-step sampling; details in the README)
+## Measured performance (teacher at 50 steps unless stated; details in the README)
 - FID-50k vs FFHQ-256: **3.78** (clean) / 3.87 (legacy TF) at the tuned Internal Guidance scale 1.55, with
   FD_DINOv2 49.0, precision 0.819 and recall 0.680. The demo uses 1.55. At the pre-training default 1.78: 4.60 / 4.59,
   FD_DINOv2 62.4. The scale was tuned on FID-10k against the same reference, so 3.78 is not a held-out estimate.
+- At the demo's 25 steps (same guidance): FID-50k **3.41** (clean) / 3.47 (legacy TF), FD_DINOv2 49.0, precision 0.819
+  and recall 0.689. Fewer steps cost nothing here. The step count was also chosen on FID-10k against the same
+  reference.
 - Attribute control at the tuned IG 1.55 (CFG 2.0): 89.9% mean agreement of the DINOv3 probe with the requested
   attribute state (84.4% at the default 1.78). The probe over-fires on generated latents, because guidance inflates
   latent statistics (std 1.18 at IG 1.55 and 1.36 at 1.78, vs 1.03 for real data; `scripts/latent_stats.py`), so
@@ -44,7 +47,9 @@ Smiling and Mouth Open. Bald, Mustache and Wearing Necktie passed the CelebA acc
     recall 0.339 (vs 0.680 for the teacher).
   - But it has lost facial-hair control. Asked for a goatee, sideburns or a beard, it renders them 0%, 10% and 11% of
     the time (teacher 99%, W-Flow 98–100%). Its mean attribute agreement is 84.5% vs 92.4% for W-Flow (same probe
-    test, both on the laptop GPU; W-Flow scored 91.8% on the 4090). The cause was not investigated.
+    test, both on the laptop GPU; W-Flow scored 91.8% on the 4090). The cause is measured: its discriminator
+    prefers the contradicting facial-hair label. An attribute-aware discriminator collapsed the student to one face
+    and was stopped at step 500, so the limitation stands ([docs/gan_facial_hair.md](docs/gan_facial_hair.md)).
   - W-Flow reaches FID 23.0, FD_DINOv2 376 and recall 0.163.
   - The adversarial student's first run collapsed (FID 207, recall 0). An anchored retry reached FID 33.1. Both had
     a discriminator noise-level bug; fixing it alone produced the 20.0.

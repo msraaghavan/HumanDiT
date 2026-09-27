@@ -32,6 +32,7 @@ lipstick, grey hair), with attribute CFG 2.0. Every image is synthetic. Rendered
 |---|---|---|---|---|---|---|---|
 | **Teacher, 50-step ODE + Internal Guidance 1.55 (tuned)** | 50 | 3.78 | 3.87 | 49.0 | 0.819 | 0.680 | – |
 | Teacher, 50-step ODE + Internal Guidance 1.78 (default) | 50 | 4.60 | 4.59 | 62.4 | 0.787 | 0.683 | 14.5 |
+| Teacher, 25-step ODE + Internal Guidance 1.55 (tuned, the demo's setting) ‡ | 25 | 3.41 | 3.47 | 49.0 | 0.819 | 0.689 | – |
 | **GAN student + anchor, discriminator fixed (3rd attempt), 1 step** † | 1 | 20.01 | 20.55 | 239.1 | 0.728 | 0.339 | – |
 | W-Flow student, 1 step | 1 | 23.01 | 23.29 | 376.2 | 0.688 | 0.163 | 286.3 |
 | GAN student + teacher-pair anchor (2nd attempt, discriminator bug), 1 step | 1 | 33.08 | 32.14 | 504.6 | 0.630 | 0.155 | 287.2 |
@@ -41,6 +42,8 @@ lipstick, grey hair), with attribute CFG 2.0. Every image is synthetic. Rendered
 FID: clean-fid against FFHQ-256 trainval70k. FD_DINOv2: Fréchet distance in DINOv2 ViT-L/14 CLS space vs all 70k FFHQ faces. Precision/recall: k-NN (k = 3) coverage in the same DINOv2 space, 10k generated vs 10k real.
 
 † Trained and scored on a Colab A100-SXM4-40GB (same code, data, steps and bf16 policy as the 4090 rows); its speed was not timed. A measured bake-off showed that GPU choice does not move these metrics ([docs/compute_platforms.md](docs/compute_platforms.md)). The only change from the 2nd attempt is the discriminator noise-level fix.
+
+‡ Scored on a Colab A100-SXM4-40GB with the same code and 50,000 samples; its speed was not timed. It makes 25 network evaluations per image to the tuned row's 50.
 
 The DCGAN generates 64×64 images, so the 256 px reference also penalises it for resolution. Scored at its own resolution against all 70k FFHQ faces downsampled to 64×64, its FID (clean) is **45.8**.
 
@@ -167,8 +170,8 @@ metadata with its sampler, seed and attributes. If you request an attribute the 
 **Compare samplers:** the same noise through the one-step GAN and the teacher at 10, 25 and 50 steps, each captioned
 with its live time and measured FID. On the laptop that is 108 ms, 0.77 s, 1.88 s and 3.81 s per face. The teacher
 defaults to **25 steps** everywhere in the demo: at the tuned guidance it scored better than 50 on FID-10k (4.79 vs
-5.23) in half the time. The headline FID-50k (3.78) was measured at 50 steps, and 25 steps were only scored on 10k
-samples. For this seed the GAN draws a different child than the teacher does: its training ties only its anchor
+5.23) in half the time, and on FID-50k too: 3.41 vs 3.78, with the same FD_DINOv2 and precision (table above).
+For this seed the GAN draws a different child than the teacher does: its training ties only its anchor
 noises to teacher outputs, so a new seed need not map to the teacher's face.
 
 ![demo: compare samplers](docs/assets/demo_compare.jpg)
@@ -252,6 +255,7 @@ Everything below happened during this project's cloud runs: the main run on a Ru
 | **The TPU port failed on its first real TPU** | The torch_xla support had been tested only on CPU and CUDA. On a Colab v6e-1, 5 of 8 rehearsal jobs failed. First, attention got float32 q/k with bf16 v: CUDA autocast casts SDPA inputs, XLA's does not (`models/layers.py:68`). Second, `torch_xla.launch` expected 4 chips on the 1-chip VM. | **Not fixed, by choice.** The A100 was cheaper per result and keeps numbers comparable with the 4090 runs, so the TPU path is marked unverified. Bugs and likely fixes: [docs/compute_platforms.md](docs/compute_platforms.md#3-the-tpu-torch_xla-port-two-known-bugs-not-fixed). |
 | **Colab refused large transfers** | `colab upload` / `download` send a file as one base64 request, and ~50 MB+ is refused. Colab images also ship `/kaggle/input`, which fooled the driver's platform check. | 40 MB parts with a sha256 manifest, reassembled and verified at both ends. Colab is now detected by `COLAB_RELEASE_TAG` (`scripts/colab/`). |
 | **The watermark didn't work** | `invisible-watermark` DWT-DCT recovered 0 of 6 marks on 256 px faces and changed pixels by up to 179 levels. | Replaced it with TrustMark: 100% recovery after PNG, JPEG q75, rescaling and cropping, 43 dB PSNR, and 0 false positives (`scripts/watermark_eval.py`). |
+| **Fixing the GAN's facial hair collapsed it instead** | The GAN's discriminator turned out to prefer the contradicting facial-hair label. An attribute-aware one (heads on the attribute tokens, plus a matching-aware term that shows real faces under one flipped attribute as fake) passed a check before training: 92% of flips ranked correctly vs 17–40% for the old D. In training, though, its scores for matched and flipped conditions never differed by more than 0.009. The matching term therefore cancelled the real-data term, D rated the student above real faces at every logged step, and by step 375 the student drew one face for every noise. | **Not fixed.** Per-125-step control logging caught it, and the run was stopped at step 500 instead of spending another ~65 min plus a 50k evaluation. The check measured ranking, not margin, and a discriminator-only check cannot see the joint training dynamics. [docs/gan_facial_hair.md](docs/gan_facial_hair.md) |
 | **The "AI-generated" PNG metadata was never written** | Found while switching the demo to the GAN: the helper that writes provenance text chunks was never called. Gradio re-encoded the PIL images itself, so every downloaded PNG lacked the metadata the model card promised. | The demo now writes each PNG itself and hands Gradio the file. Checked on files downloaded through the app's API: all carry the AI-generated flag, sampler, seed and attributes. |
 
 | EMA, 1.0M samples | raw weights, 0.72M samples |
@@ -288,7 +292,7 @@ uv run --extra demo python app/gradio_app.py            # live demo
 | | Original project | HumanDiT |
 |---|---|---|
 | Model | DCGAN (2015), 64×64 | RAEv2 latent diffusion transformer, 256×256 |
-| Quality (FID-50k vs FFHQ-256, clean) | **177.6** (45.8 at its own 64 px) | **3.78** (teacher, tuned guidance) · 20.0 (1-step GAN student) |
+| Quality (FID-50k vs FFHQ-256, clean) | **177.6** (45.8 at its own 64 px) | **3.41** (teacher, tuned guidance, 25 steps; 3.78 at 50) · 20.0 (1-step GAN student) |
 | Control | none | 12 face attributes, any subset (90% probe agreement at the tuned guidance) |
 | Sampling | 1 step (GAN) | 50-step teacher **and** a 1-step student, 20× faster |
 | Evaluation | none | FID, FD_DINOv2, precision/recall, controllability, memorisation, guidance and step ablations |
@@ -313,8 +317,11 @@ its "latent consistency" loss penalised output differences between nearby latent
   376) and recall (0.34 vs 0.16), so the direction is clear, but the exact margins are single-run numbers.
 - **The GAN wins on image quality but loses on control.** It has lost facial hair: asked for a goatee, sideburns or a
   beard, it renders them 0%, 10% and 11% of the time, where the teacher and W-Flow manage 98%–100%. Its mean attribute
-  agreement is 84.5% vs 92.4% for W-Flow. The cause was not investigated. The demo still uses the GAN for its real-time
-  mode (better faces), warns when one of these attributes is requested, and the teacher handles all 12.
+  agreement is 84.5% vs 92.4% for W-Flow. The cause is measured: its discriminator prefers the *contradicting*
+  facial-hair label (for Beard, 90% of the time), so it gave the student no reason to draw requested facial hair. An
+  attribute-aware discriminator fixed that in a pre-training check, but collapsed the student to one face in training,
+  so the limitation stands ([docs/gan_facial_hair.md](docs/gan_facial_hair.md)). The demo still uses the GAN for its
+  real-time mode (better faces), warns when one of these attributes is requested, and the teacher handles all 12.
 - The default guidance scale (1.78, chosen before training) over-guides: it inflates latent statistics by about a
   third and costs FID (4.60 vs 3.78 at 1.55). Attribute control is reported at the tuned 1.55, where the inflation is
   smaller (latent std 1.18 vs 1.36), but the probe rates still carry some of it (explained next to the table).
@@ -327,8 +334,9 @@ its "latent consistency" loss penalised output differences between nearby latent
   - The 4090 runs used the same policy, so the metrics compare like with like.
   - But a seed's face reproduces across GPUs only in fp32 (85 dB, i.e. to within float rounding). In bf16 it can
     shift slightly.
-- The guidance scale was tuned on FID-10k of the same FFHQ reference used for the headline FID-50k. It is one
-  scalar picked from four values, but the tuned number is still not a held-out estimate.
+- The guidance scale and the demo's step count were chosen on FID-10k of the same FFHQ reference used for FID-50k:
+  one scalar from four values and one step count from three. The tuned numbers (3.78 at 50 steps, 3.41 at 25) are
+  still not held-out estimates.
 
 ## Licences
 

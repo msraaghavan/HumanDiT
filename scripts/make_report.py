@@ -108,6 +108,11 @@ def build(runs: Path) -> str:
             f"Teacher, {t0.get('steps', '?')}-step ODE + Internal Guidance "
             f"{(t0.get('guidance') or {}).get('ig_scale', '?')} (default)",
         ),
+        (
+            "teacher_tuned_25step",
+            f"Teacher, 25-step ODE + Internal Guidance {(tt.get('guidance') or {}).get('ig_scale', '?')} (tuned, "
+            "the demo's setting) ‡",
+        ),
         ("gan_fixed_1step", "**GAN student + anchor, discriminator fixed (3rd attempt), 1 step** †"),
         ("wflow_1step", "W-Flow student, 1 step"),
         ("gan_anchor_1step", "GAN student + teacher-pair anchor (2nd attempt, discriminator bug), 1 step"),
@@ -145,6 +150,14 @@ def build(runs: Path) -> str:
                 "and bf16 policy as the 4090 rows); its speed was not timed. A measured bake-off showed that GPU "
                 "choice does not move these metrics ([docs/compute_platforms.md](docs/compute_platforms.md)). "
                 "The only change from the 2nd attempt is the discriminator noise-level fix.",
+                "",
+            ]
+        t25 = ev.get("teacher_tuned_25step")
+        if t25:
+            lines += [
+                f"‡ Scored on a Colab {t25.get('gpu', 'GPU').replace('NVIDIA ', '')} with the same code and "
+                f"{t25.get('n', 0):,} samples; its speed was not timed. It makes {t25.get('steps', '?')} network "
+                f"evaluations per image to the tuned row's {tt.get('steps', '?')}.",
                 "",
             ]
         legacy = ev.get("legacy_dcgan_64px") or {}
