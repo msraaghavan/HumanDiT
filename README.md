@@ -279,10 +279,10 @@ browser (on the CPU there).
 uv run python scripts/build_space.py --model-repo USER/HumanDiT --github https://github.com/USER/REPO
 hf auth login                                           # yourself; a write token
 hf upload USER/HumanDiT dist/model . --repo-type model
-hf upload USER/HumanDiT-demo dist/space . --repo-type space   # then Settings -> Hardware -> ZeroGPU
+hf upload USER/HumanDiT-demo dist/space . --repo-type space --exclude "**/__pycache__/*"   # then Settings -> Hardware -> ZeroGPU
 ```
 
-Test the Space before uploading: `cd dist/space && HUMANDIT_MODEL_DIR=../model python app.py`.
+Test the Space before uploading: `cd dist/space && HUMANDIT_MODEL_DIR=../model python app.py`. Without `--github`, the files the model card links to (the reel, `docs/gan_facial_hair.md` and its figure) are copied into the model repo so the card's links work on the Hub.
 
 ## How it works
 

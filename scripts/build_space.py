@@ -6,9 +6,9 @@ Writes dist/model (weights, probe, measured results, model card) and dist/space 
 package, the page's assets, requirements and a Space card). Nothing is uploaded: that is a separate, deliberate step,
 
     hf upload USER/HumanDiT dist/model . --repo-type model
-    hf upload USER/HumanDiT-demo dist/space . --repo-type space
+    hf upload USER/HumanDiT-demo dist/space . --repo-type space --exclude "**/__pycache__/*"
 
-after which the Space's hardware is set to ZeroGPU in its settings. Large files are hard-linked when possible, so the
+(the exclude matters if the Space folder was test-run locally), after which the Space's hardware is set to ZeroGPU in its settings. Large files are hard-linked when possible, so the
 1.5 GB of weights are not copied twice on disk.
 """
 
@@ -78,6 +78,28 @@ def absolute_links(md: str, github: str | None) -> str:
     )
 
 
+LINK = re.compile(r'\]\(([^)#]+)\)|(?:src|href)="([^"#]+)"')
+
+
+def bundle_links(md: Path, out: Path, depth: int = 1) -> list[str]:
+    """Without a GitHub repo to point at, copy what the card links to relatively into the model repo, at the same
+    paths, so the links resolve on the Hub; a linked Markdown file brings its own linked files, one level down."""
+    copied = []
+    for m in LINK.finditer(md.read_text(encoding="utf-8")):
+        target = m.group(1) or m.group(2)
+        if re.match(r"^(https?:|mailto:)", target):
+            continue
+        src = (md.parent / target).resolve()
+        if not src.is_file():
+            continue
+        rel = src.relative_to(ROOT).as_posix()
+        put(src, out / rel)
+        copied.append(rel)
+        if src.suffix == ".md" and depth > 0:
+            copied += bundle_links(src, out, depth - 1)
+    return copied
+
+
 def build_model(out: Path, github: str | None) -> None:
     for dst, src in WEIGHTS.items():
         put(ROOT / src, out / dst)
@@ -102,6 +124,11 @@ def build_model(out: Path, github: str | None) -> None:
         }
     )
     (out / "README.md").write_text(meta + absolute_links(card, github), encoding="utf-8")
+    if not github:
+        print(
+            "bundled for the card's links:",
+            ", ".join(dict.fromkeys(bundle_links(ROOT / "MODEL_CARD.md", out))),
+        )
     (out / "LICENSE.md").write_text(
         "# Licence of these weights\n\n"
         "Non-commercial research and education only. The weights inherit the terms of what they were trained on "
