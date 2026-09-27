@@ -133,6 +133,24 @@ def setup() -> None:
     sh("python -c 'import sys, torch; print(sys.version); print(torch.__version__, torch.version.cuda)'")
     if not GPU:
         sh("python -c 'import torch_xla; print(torch_xla.__version__)'")
+    # clean-fid's FFHQ reference statistics, if shipped with the inputs: its CMU download reset connections mid-run
+    stats = glob.glob(str(INP / "**" / "ffhq_*_trainval70k_256.npz"), recursive=True)
+    if stats:
+        where = subprocess.run(
+            [
+                "python",
+                "-c",
+                "import cleanfid, os; print(os.path.join(os.path.dirname(cleanfid.__file__), 'stats'))",
+            ],
+            capture_output=True,
+            text=True,
+            env=ENV,
+        ).stdout.strip()
+        if where:
+            os.makedirs(where, exist_ok=True)
+            for f in stats:
+                shutil.copy(f, where)
+            print(f"[driver] clean-fid statistics from the inputs -> {where}", flush=True)
 
 
 def jobs(toy: bool) -> list[tuple[str, str, list[str]]]:
