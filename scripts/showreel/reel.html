@@ -1,0 +1,626 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="icon" href="data:,">
+<title>HumanDiT reel</title>
+<!--
+  The 15-second HumanDiT reel. It speaks to two audiences at once: one big plain-English sentence per scene for anyone,
+  and a small technical footnote for engineers. Every frame is a pure function of time t (window.renderAt), so
+  scripts/showreel/render.py can capture it frame-accurately, with motion-blur subframes. Open with ?play to watch it in
+  real time, or ?t=7.2 for one frame. Faces, timings and metrics come from scripts/showreel/build_assets.py.
+-->
+<style>
+  :root {
+    --ink: #07080a; --paper: #f1eee7; --dim: rgba(241, 238, 231, .5); --faint: rgba(241, 238, 231, .16);
+    --accent: #ff4f2e; --cyan: #7fe3ff;
+    --sans: Bahnschrift, "DIN Alternate", "Barlow Condensed", "Arial Narrow", sans-serif;
+    --mono: "Cascadia Mono", Consolas, "SF Mono", Menlo, monospace;
+  }
+  html, body { margin: 0; background: #000; overflow: hidden; }
+  #stage { position: relative; width: 1920px; height: 1080px; overflow: hidden; background: var(--ink);
+           transform-origin: 0 0; font-family: var(--sans); color: var(--paper); }
+  canvas, #dom { position: absolute; left: 0; top: 0; transform-origin: 50% 50%; }
+  #dom, #fx { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; }
+  .abs { position: absolute; left: 0; top: 0; will-change: transform, opacity; white-space: pre; }
+  .mono { font-family: var(--mono); letter-spacing: .02em; }
+  .mask { position: absolute; overflow: hidden; }
+  .ltr { display: inline-block; }
+  .head { position: absolute; left: 0; top: 0; white-space: normal; }
+  .head .w { display: inline-block; overflow: hidden; vertical-align: top; padding: 0 .03em .1em 0; margin-right: .22em;
+             position: relative; z-index: 1; }
+  .head .w > span { display: inline-block; }
+  .head .hl { position: absolute; height: .13em; background: var(--accent); transform-origin: 0 50%; z-index: 0; }
+  .chip { position: absolute; width: 262px; height: 66px; border: 1.5px solid var(--faint); border-radius: 12px;
+          box-sizing: border-box; overflow: hidden; }
+  .chip .fill { position: absolute; inset: 0; background: var(--accent); transform-origin: 0 50%; }
+  .chip .name { position: absolute; left: 20px; top: 16px; font-size: 29px; font-variation-settings: "wdth" 85, "wght" 500; }
+  .chip .p { position: absolute; right: 16px; top: 19px; font-size: 25px; font-variation-settings: "wdth" 80, "wght" 600; }
+  .glass { position: absolute; background: rgba(7, 8, 10, .7); backdrop-filter: blur(22px) saturate(1.2);
+           border: 1px solid rgba(241, 238, 231, .14); border-radius: 22px; }
+  .bar { position: absolute; height: 20px; border-radius: 10px; }
+  #vignette { position: absolute; inset: 0; pointer-events: none;
+              background: radial-gradient(ellipse at 50% 48%, rgba(0,0,0,0) 55%, rgba(0,0,0,.55) 100%); }
+  .scrim { position: absolute; left: 0; width: 1920px; height: 150px; pointer-events: none; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="cv" width="1920" height="1080"></canvas>
+  <div id="dom"></div>
+  <div class="scrim" style="top:0;background:linear-gradient(rgba(7,8,10,.75),rgba(7,8,10,0))"></div>
+  <div class="scrim" style="bottom:0;background:linear-gradient(rgba(7,8,10,0),rgba(7,8,10,.8))"></div>
+  <div id="vignette"></div>
+  <div id="fx"></div>
+  <div id="hud"></div>
+</div>
+<script>
+"use strict";
+const T = 15, FPS = 30, W = 1920, H = 1080;
+const ASSETS = "../../runs/showreel/assets/";
+const ATTRS = ["Male", "Eyeglasses", "Hat", "Goatee", "Sideburns", "Beard", "Lipstick", "Gray_Hair", "Bangs",
+               "Blond_Hair", "Smiling", "Mouth_Open"];
+const PLAIN = { Male: "Man", Eyeglasses: "Glasses", Hat: "Hat", Goatee: "Goatee", Sideburns: "Sideburns", Beard: "Beard",
+                Lipstick: "Lipstick", Gray_Hair: "Grey hair", Bangs: "Bangs", Blond_Hair: "Blond hair",
+                Smiling: "Smile", Mouth_Open: "Open mouth" };
+const SCENES = [[0, "START"], [2.5, "DRAW"], [5, "CHOOSE"], [8, "SPEED"], [10.5, "REALISM"], [13, "HUMANDiT"]];
+
+// ---------------------------------------------------------------- maths
+const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
+const seg = (t, a, b) => clamp((t - a) / (b - a));
+const lerp = (a, b, u) => a + (b - a) * u;
+const E = {
+  lin: u => u,
+  outExpo: u => (u >= 1 ? 1 : 1 - Math.pow(2, -10 * u)),
+  inExpo: u => (u <= 0 ? 0 : Math.pow(2, 10 * u - 10)),
+  inOutExpo: u => (u <= 0 ? 0 : u >= 1 ? 1 : u < .5 ? Math.pow(2, 20 * u - 10) / 2 : (2 - Math.pow(2, -20 * u + 10)) / 2),
+  outCubic: u => 1 - Math.pow(1 - u, 3),
+  inCubic: u => u * u * u,
+  inOutCubic: u => (u < .5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) / 2),
+  outQuint: u => 1 - Math.pow(1 - u, 5),
+  outBack: u => { const c1 = 1.9, c3 = c1 + 1; return 1 + c3 * Math.pow(u - 1, 3) + c1 * Math.pow(u - 1, 2); },
+};
+const tw = (t, a, b, ease = E.outExpo) => ease(seg(t, a, b));   // eased 0..1 over [a, b]
+const hash = (i, j = 0) => { const x = Math.sin(i * 127.1 + j * 311.7 + 74.7) * 43758.5453; return x - Math.floor(x); };
+const wrap = t => ((t % T) + T) % T;
+const OMEGA = 2 * Math.PI * 18 / T;           // shimmer frequency that is exactly periodic over the loop
+const live = (t, a, b) => t >= a && t < b;
+
+// ---------------------------------------------------------------- DOM helpers
+const dom = document.getElementById("dom"), hudEl = document.getElementById("hud"), fxEl = document.getElementById("fx");
+function el(parent, cls, text = "", style = {}) {
+  const e = document.createElement("div");
+  e.className = cls;
+  if (text) e.textContent = text;
+  Object.assign(e.style, style);
+  parent.appendChild(e);
+  return e;
+}
+function place(e, x, y, o = 1, s = 1, extra = "") {
+  e.style.transform = `translate(${x}px, ${y}px) scale(${s}) ${extra}`;
+  e.style.opacity = o;
+}
+function letters(parent, text, cls, style) {        // a line of per-letter spans inside a clipping mask
+  const m = el(parent, "mask abs", "", style);
+  const spans = [...text].map(ch => el(m, "ltr " + (cls || ""), ch === " " ? " " : ch));
+  return { m, spans };
+}
+// a plain-English headline: each word rises out of its own mask; `hi` words get a marker sweep underneath
+function headline(parent, text, style, hi = []) {
+  const box = el(parent, "head", "", style);
+  const words = text.split(" ").map(w => { const m = el(box, "w"); const s = document.createElement("span"); s.textContent = w; m.appendChild(s); return { m, s }; });
+  const px = parseFloat(style.fontSize);
+  const bars = hi.map(i => {
+    const w = words[i].m, b = el(box, "hl"), nx = words[i + 1]?.m;
+    const joined = hi.includes(i + 1) && nx && nx.offsetTop === w.offsetTop;
+    const width = joined ? nx.offsetLeft - w.offsetLeft : w.offsetWidth - .03 * px;
+    Object.assign(b.style, { left: `${w.offsetLeft}px`, top: `${w.offsetTop + w.offsetHeight - .2 * px}px`, width: `${width}px` });
+    return { b, i };
+  });
+  return { box, words, bars };
+}
+function showHead(h, t, tIn, tOut, x, y, stagger = .05) {
+  const on = t >= tIn - .01 && t < tOut + .6;
+  place(h.box, x, y, on ? 1 : 0);
+  if (!on) return;
+  h.words.forEach(({ s }, i) => {
+    const a = tw(t, tIn + i * stagger, tIn + i * stagger + .6), b = tw(t, tOut + i * stagger * .4, tOut + i * stagger * .4 + .32, E.inExpo);
+    s.style.transform = `translateY(${(1 - a) * 108 - b * 108}%)`;
+  });
+  h.bars.forEach(({ b, i }, k) => {
+    const g = tw(t, tIn + .5 + i * stagger + k * .12, tIn + .95 + i * stagger + k * .12, E.inOutCubic);
+    const o = tw(t, tOut, tOut + .25, E.inCubic);
+    b.style.transform = `scaleX(${g * (1 - o)})`;
+    h.words[i].s.style.color = g > .6 ? "var(--accent)" : "var(--paper)";
+  });
+}
+const GLYPHS = "01#%&*+=<>/\\|_-:;░▒▓";
+function scramble(e, text, u, t) {                  // decode-in: random glyphs resolve to the text, left to right
+  if (u >= 1) { e.textContent = text; return; }
+  const n = text.length, f = Math.round(t * FPS);
+  let s = "";
+  for (let i = 0; i < n; i++) {
+    const r = (i / n) * .65, ch = text[i];
+    if (ch === " " || u > r + .35) s += u > r + .35 ? ch : " ";
+    else if (u > r) s += GLYPHS[Math.floor(hash(i, f) * GLYPHS.length)];
+    else s += " ";
+  }
+  e.textContent = s;
+}
+function odometer(parent, digits, style) {           // rolling digit columns
+  const box = el(parent, "abs", "", style);
+  const cols = [];
+  for (let d = 0; d < digits; d++) {
+    const m = el(box, "mask", "", { position: "relative", display: "inline-block", height: "1em", width: ".56em",
+                                    verticalAlign: "top" });
+    const strip = el(m, "", "", { position: "absolute", left: 0, top: 0, width: "100%", textAlign: "center" });
+    strip.innerHTML = [...Array(11).keys()].map(k => `<div style="height:1em;line-height:1em">${k % 10}</div>`).join("");
+    cols.push(strip);
+  }
+  return { box, set(v) {                              // v: float; the last digit rolls continuously
+    const iv = Math.floor(v), fr = v - iv;
+    for (let d = 0; d < digits; d++) {
+      const p = Math.pow(10, digits - 1 - d), dig = Math.floor(iv / p) % 10;
+      const carry = d === digits - 1 ? fr : (iv % p === p - 1 ? fr : 0);
+      cols[d].style.transform = `translateY(${-(dig + carry)}em)`;
+    }
+  } };
+}
+
+// ---------------------------------------------------------------- assets
+const img = src => new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = ASSETS + src; });
+const pad = n => String(n).padStart(2, "0");
+let M, TRAJ, EDIT, GRID, MORPH, DCGAN, TOK_NOISE, TOK_STEPS;
+
+// ---------------------------------------------------------------- canvas painters
+const cv = document.getElementById("cv"), ctx = cv.getContext("2d");
+function mix(a, b, u) { const o = new Float32Array(a.length); for (let i = 0; i < a.length; i++) o[i] = a[i] + (b[i] - a[i]) * u; return o; }
+function tokensAt(k) {                                   // token colours at fractional ODE step k
+  const i = clamp(Math.floor(k), 0, TOK_STEPS.length - 1), j = Math.min(i + 1, TOK_STEPS.length - 1);
+  return mix(TOK_STEPS[i], TOK_STEPS[j], clamp(k - i));
+}
+// 16x16 mosaic: gap = fraction of the pitch left empty; fn(r, c) -> {s: scale, k: brightness, a: alpha}
+function mosaic(cols, x, y, size, gap, fn) {
+  const n = 16, p = size / n;
+  for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) {
+    const o = fn ? fn(r, c) : {};
+    const s = (o.s ?? 1) * p * (1 - gap), k = o.k ?? 1, a = o.a ?? 1;
+    if (a <= 0.003 || s <= .2) continue;
+    const i = (r * n + c) * 3;
+    ctx.fillStyle = `rgba(${cols[i] * k | 0},${cols[i + 1] * k | 0},${cols[i + 2] * k | 0},${a})`;
+    ctx.fillRect(x + c * p + (p - s) / 2, y + r * p + (p - s) / 2, s, s);
+  }
+}
+function face(im, x, y, size, alpha = 1, pixelated = false) {
+  if (alpha <= 0.003) return;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.imageSmoothingEnabled = !pixelated;
+  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(im, x, y, size, size);
+  ctx.restore();
+}
+function frameLine(x, y, w, h, a, color = "rgba(241,238,231,.22)") {   // hairline frame with corner ticks
+  if (a <= 0) return;
+  ctx.save(); ctx.globalAlpha = a; ctx.strokeStyle = color; ctx.lineWidth = 1.5;
+  ctx.strokeRect(x - 12, y - 12, w + 24, h + 24);
+  ctx.strokeStyle = "rgba(241,238,231,.9)"; ctx.lineWidth = 2.5; const L = 22;
+  for (const [cx, cy, dx, dy] of [[x - 12, y - 12, 1, 1], [x + w + 12, y - 12, -1, 1], [x - 12, y + h + 12, 1, -1], [x + w + 12, y + h + 12, -1, -1]]) {
+    ctx.beginPath(); ctx.moveTo(cx, cy + dy * L); ctx.lineTo(cx, cy); ctx.lineTo(cx + dx * L, cy); ctx.stroke();
+  }
+  ctx.restore();
+}
+function ring(cx, cy, r, u, a) {                        // progress ring (the ODE steps)
+  if (a <= 0) return;
+  ctx.save(); ctx.globalAlpha = a; ctx.lineCap = "round";
+  ctx.strokeStyle = "rgba(241,238,231,.12)"; ctx.lineWidth = 10;
+  ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
+  ctx.strokeStyle = "#ff4f2e"; ctx.lineWidth = 10;
+  ctx.beginPath(); ctx.arc(cx, cy, r, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * u); ctx.stroke();
+  const ang = -Math.PI / 2 + Math.PI * 2 * u;               // the leading dot
+  ctx.fillStyle = "#f1eee7"; ctx.beginPath(); ctx.arc(cx + r * Math.cos(ang), cy + r * Math.sin(ang), 9, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+}
+
+// ---------------------------------------------------------------- layout constants
+const G1 = { x: 1180, y: 200, s: 640, gap: .15 };          // the noise grid (scene 1 and the loop point)
+const F2 = { x: 170, y: 250, s: 600 };                      // the hero face in scenes 2-3
+const F6 = { x: 730, y: 112, s: 460 };                      // the face on the end card
+const TILE = 160, GY = 60;                                  // scene-4 grid: 12 x 6 tiles of 160 px
+const STEP_T0 = 2.7, STEP_T1 = 4.6;                         // the 25 ODE steps play between these times
+const EDIT_T = [5.5, 6.0, 6.5, 7.0];                        // attribute switches, on the beat
+const SHUT = 10.38;                                         // the shutter wipe into scene 5
+const stepAt = t => E.inOutCubic(seg(t, STEP_T0, STEP_T1)) * 24;
+const RC = { x: 1210, y: 560, r: 150 };                     // the step ring, scene 2
+const METER = { x: 1040, y: 690, w: 760 };                  // the realism meter, scene 5
+const meterX = v => METER.x + METER.w * clamp(Math.log10(Math.max(v, 1)) / Math.log10(300));
+
+// ---------------------------------------------------------------- build the DOM (once)
+const X = {};
+function build() {
+  const big = (px, wdth = 85, wght = 600) => ({ fontSize: `${px}px`, lineHeight: "1.08", fontVariationSettings: `"wdth" ${wdth}, "wght" ${wght}` });
+  // HUD
+  X.hudL = el(hudEl, "abs mono", "HUMANDiT  /  SHOWREEL", { fontSize: "17px", letterSpacing: ".28em", color: "var(--paper)" });
+  X.tc = el(hudEl, "abs mono", "", { fontSize: "17px", letterSpacing: ".12em" });
+  X.scene = el(hudEl, "abs mono", "", { fontSize: "16px", letterSpacing: ".22em", color: "var(--dim)" });
+  X.prog = el(hudEl, "abs", "", { width: "260px", height: "2px", background: "var(--faint)" });
+  X.progFill = el(X.prog, "", "", { position: "absolute", left: 0, top: 0, height: "2px", width: "260px", background: "var(--accent)", transformOrigin: "0 0" });
+  X.note = el(hudEl, "abs", "Every face in this video was invented by the AI. Every number is measured.",
+              { fontSize: "21px", color: "var(--dim)", fontVariationSettings: '"wdth" 90, "wght" 400' });
+
+  // scene 1: start
+  X.t1 = letters(dom, "HumanDiT", "", { fontSize: "210px", lineHeight: "1", height: "215px", left: "96px", top: "250px",
+                                          fontVariationSettings: '"wdth" 100, "wght" 600' });
+  X.t1.spans.slice(5).forEach(s => (s.style.color = "var(--accent)"));
+  X.h1 = headline(dom, "An AI that invents faces of people who don't exist.", { ...big(62, 90, 500), width: "900px" }, [8, 9]);
+  X.g1 = headline(dom, "It starts from pure random static.", { ...big(36, 90, 500), width: "640px" }, [4, 5]);
+  X.tech1 = el(dom, "abs mono", "", { fontSize: "18px", color: "var(--cyan)" });
+
+  // scene 2: draw
+  X.h2 = headline(dom, "It cleans up the static, one step at a time.", { ...big(72), width: "900px" }, [5, 6, 7, 8, 9]);
+  X.stepLbl = el(dom, "abs", "STEP", { fontSize: "30px", letterSpacing: ".3em", color: "var(--dim)", fontVariationSettings: '"wdth" 90, "wght" 500' });
+  X.odo = odometer(dom, 2, { fontSize: "150px", lineHeight: "1", fontVariationSettings: '"wdth" 75, "wght" 600', fontFeatureSettings: '"tnum"' });
+  X.of25 = el(dom, "abs", "of 25", { fontSize: "34px", color: "var(--dim)", fontVariationSettings: '"wdth" 85, "wght" 500' });
+  X.sk = el(dom, "abs", "its rough inner sketch", { fontSize: "26px", color: "var(--cyan)", fontVariationSettings: '"wdth" 85, "wght" 500' });
+  X.tech2 = el(dom, "abs mono", "", { fontSize: "18px", color: "var(--dim)" });
+
+  // scene 3: choose
+  X.h3 = headline(dom, "You pick the details.", { ...big(76), width: "900px" }, [3]);
+  X.s3 = headline(dom, "Same face. Add glasses, a smile, grey hair, bangs.", { ...big(34, 90, 400), width: "860px" }, []);
+  X.chips = ATTRS.map(n => {
+    const c = el(dom, "chip abs");
+    c.fill = el(c, "fill");
+    c.nm = el(c, "name", PLAIN[n]);
+    c.p = el(c, "p", "");
+    return c;
+  });
+  X.chk = headline(dom, "✓ = a second AI checked the face and agrees", { ...big(28, 90, 400), width: "860px" }, []);
+  X.tech3 = el(dom, "abs mono", "", { fontSize: "17px", color: "var(--dim)" });
+
+  // scene 4: speed
+  X.glass = el(dom, "glass abs", "", { width: "1180px", height: "520px" });
+  X.k4 = el(X.glass, "abs", "TURBO MODE", { fontSize: "26px", letterSpacing: ".3em", left: "60px", top: "44px", color: "var(--dim)", fontVariationSettings: '"wdth" 90, "wght" 500' });
+  X.sec = el(X.glass, "abs", "", { fontSize: "160px", lineHeight: "1", left: "54px", top: "84px", color: "var(--accent)",
+                                   fontVariationSettings: '"wdth" 75, "wght" 600', fontFeatureSettings: '"tnum"' });
+  X.secU = el(X.glass, "abs", "seconds\nper face", { fontSize: "36px", lineHeight: "1.05", left: "400px", top: "118px", fontVariationSettings: '"wdth" 85, "wght" 500' });
+  X.faster = el(X.glass, "abs", "", { fontSize: "92px", lineHeight: "1", left: "700px", top: "92px", transformOrigin: "0 50%", color: "var(--accent)", fontVariationSettings: '"wdth" 75, "wght" 600' });
+  X.fasterL = el(X.glass, "abs", "faster than careful mode", { fontSize: "26px", left: "704px", top: "190px", color: "var(--dim)", fontVariationSettings: '"wdth" 85, "wght" 500' });
+  X.barT = el(X.glass, "bar", "", { left: "60px", top: "300px", background: "var(--paper)" });
+  X.barS = el(X.glass, "bar", "", { left: "60px", top: "372px", background: "var(--accent)" });
+  X.barTl = el(X.glass, "abs", "", { fontSize: "24px", left: "60px", top: "262px", color: "var(--paper)", fontVariationSettings: '"wdth" 90, "wght" 500' });
+  X.barSl = el(X.glass, "abs", "", { fontSize: "24px", left: "60px", top: "334px", color: "var(--paper)", fontVariationSettings: '"wdth" 90, "wght" 500' });
+  X.barTv = el(X.glass, "abs mono", "", { fontSize: "21px", top: "298px" });
+  X.barSv = el(X.glass, "abs mono", "", { fontSize: "21px", top: "370px", color: "var(--accent)" });
+  X.c4 = el(X.glass, "abs", "72 faces. None of them real. None hand-picked. Turbo trades a little detail for speed.",
+            { fontSize: "26px", left: "60px", top: "420px", fontVariationSettings: '"wdth" 88, "wght" 400' });
+  X.tech4 = el(X.glass, "abs mono", "", { fontSize: "15px", left: "60px", top: "468px", color: "var(--dim)" });
+  X.shutter = [...Array(10)].map(() => el(fxEl, "abs", "", { width: "193px", height: "1080px", background: "var(--accent)", transformOrigin: "50% 0" }));
+
+  // scene 5: realism
+  X.h5 = headline(dom, "How real do they look?", { ...big(76), width: "1100px" }, [1]);
+  X.before = el(dom, "abs", "BEFORE\nthis project's first version", { fontSize: "24px", lineHeight: "1.2", color: "var(--dim)", fontVariationSettings: '"wdth" 88, "wght" 500' });
+  X.after = el(dom, "abs", "AFTER\nHumanDiT", { fontSize: "24px", lineHeight: "1.2", color: "var(--dim)", fontVariationSettings: '"wdth" 88, "wght" 500' });
+  X.fidL = el(dom, "abs", "Realism gap: lower means closer to real photos", { fontSize: "30px", color: "var(--paper)", fontVariationSettings: '"wdth" 88, "wght" 500' });
+  X.fid = el(dom, "abs", "", { fontSize: "230px", lineHeight: "1", fontVariationSettings: '"wdth" 75, "wght" 600', fontFeatureSettings: '"tnum"' });
+  X.mL = el(dom, "abs", "real photos", { fontSize: "22px", color: "var(--paper)", fontVariationSettings: '"wdth" 88, "wght" 500' });
+  X.mR = el(dom, "abs", "unrealistic", { fontSize: "22px", color: "var(--dim)", fontVariationSettings: '"wdth" 88, "wght" 500' });
+  X.mB = el(dom, "abs", "", { fontSize: "22px", color: "var(--dim)", fontVariationSettings: '"wdth" 88, "wght" 500' });
+  X.stats = [0, 1, 2, 3].map(() => {
+    const s = el(dom, "abs", "", { width: "400px", height: "140px", borderTop: "2px solid var(--faint)" });
+    s.v = el(s, "abs", "", { top: "16px", fontSize: "62px", fontVariationSettings: '"wdth" 80, "wght" 600' });
+    s.l = el(s, "abs", "", { top: "88px", fontSize: "23px", lineHeight: "1.15", whiteSpace: "pre", color: "var(--dim)", fontVariationSettings: '"wdth" 88, "wght" 400' });
+    return s;
+  });
+  X.tech5 = el(dom, "abs mono", "", { fontSize: "16px", color: "var(--dim)" });
+
+  // scene 6: end card
+  X.t6 = letters(dom, "HumanDiT", "", { fontSize: "150px", lineHeight: "1", height: "156px", fontVariationSettings: '"wdth" 100, "wght" 600' });
+  X.t6.spans.slice(5).forEach(s => (s.style.color = "var(--accent)"));
+  X.h6 = headline(dom, "Faces of people who don't exist, made responsibly.", { ...big(44, 90, 500), width: "1300px", textAlign: "center" }, [7]);
+  X.s6 = el(dom, "abs", "Each one carries an invisible watermark, so it can always be identified as AI-made.",
+            { fontSize: "28px", color: "var(--dim)", fontVariationSettings: '"wdth" 90, "wght" 400' });
+  X.tech6 = el(dom, "abs mono", "", { fontSize: "17px", color: "var(--dim)" });
+}
+
+// ---------------------------------------------------------------- the timeline
+function renderAt(tIn) {
+  const t = wrap(tIn);
+  ctx.clearRect(0, 0, W, H);
+  const drift = (t / T) * 48;                               // one dot pitch per loop: seamless
+  ctx.fillStyle = "rgba(241,238,231,.07)";
+  for (let y = -48; y < H + 48; y += 48) for (let x = -48; x < W + 48; x += 48) ctx.fillRect(x + drift, y + drift * .5, 2, 2);
+  let sh = 0;                                               // camera shake: a short decaying kick at each cut
+  for (const [s0] of SCENES.slice(1)) if (t >= s0) sh = Math.max(sh, Math.exp(-(t - s0) * 16));
+  const shx = sh * 5 * Math.sin(t * 97), shy = sh * 4 * Math.cos(t * 83), shs = 1 + sh * .008;
+  for (const layer of [cv, dom]) layer.style.transform = `translate(${shx}px, ${shy}px) scale(${shs})`;
+
+  // ===== HUD =====
+  const f = Math.round(t * FPS) % (T * FPS), ss = Math.floor(f / FPS), ff = f % FPS;
+  X.tc.textContent = `00:00:${pad(ss)}:${pad(ff)}`;
+  place(X.hudL, 56, 44); place(X.tc, 1920 - 56 - 150, 44);
+  let si = 0; SCENES.forEach(([s0], i) => { if (t >= s0) si = i; });
+  X.scene.textContent = `${pad(si + 1)} / ${pad(SCENES.length)}   ${SCENES[si][1]}`;
+  place(X.scene, 1920 - 56 - 330, 1080 - 72); place(X.prog, 1920 - 56 - 260, 1080 - 40);
+  X.progFill.style.transform = `scaleX(${t / T})`;
+  place(X.note, 56, 1080 - 58);
+
+  // ===== 1. start: pure static =====
+  if (t < 2.8) {
+    const u = tw(t, 2.05, 2.65, E.inOutCubic);           // the static flies into the picture frame and closes up
+    const gx = lerp(G1.x, F2.x, u), gy = lerp(G1.y, F2.y, u), gs = lerp(G1.s, F2.s, u), gap = lerp(G1.gap, 0, u);
+    const colMix = mix(TOK_NOISE, TOK_STEPS[0], tw(t, 1.8, 2.55, E.inOutCubic));
+    mosaic(colMix, gx, gy, gs, gap, (r, c) => ({ k: .78 + .22 * Math.sin(t * OMEGA + hash(r, c) * 6.283) }));
+    face(TRAJ[0], F2.x, F2.y, F2.s, tw(t, 2.45, 2.75, E.inOutCubic));
+    frameLine(gx, gy, gs, gs, tw(t, 2.3, 2.7));
+  }
+  X.t1.spans.forEach((s, i) => {
+    const a = tw(t, .15 + i * .045, .9 + i * .045), b = tw(t, 1.85 + i * .02, 2.15 + i * .02, E.inExpo);
+    s.style.transform = `translateY(${(1 - a) * 110 - b * 110}%)`;
+    s.style.fontVariationSettings = `"wdth" ${lerp(75, 100, tw(t, .15 + i * .045, 1.25 + i * .045, E.outCubic)).toFixed(1)}, "wght" 600`;
+  });
+  X.t1.m.style.opacity = t < 2.4 ? 1 : 0;
+  showHead(X.h1, t, .45, 1.85, 100, 500, .045);
+  showHead(X.g1, t, .75, 1.8, G1.x, G1.y + G1.s + 34, .05);
+  scramble(X.tech1, "for engineers: z ~ N(0, I) · 16 × 16 tokens × 1,024 numbers", tw(t, .9, 1.5, E.lin), t);
+  place(X.tech1, G1.x, G1.y + G1.s + 88, live(t, .8, 2) ? 1 - tw(t, 1.8, 2.0) : 0);
+
+  // ===== 2. draw: the teacher's 25 steps =====
+  const k = stepAt(t), stepN = clamp(k + 1, 1, 25), out2 = tw(t, 4.8, 5.1, E.inCubic), in2 = tw(t, 2.5, 3.0);
+  if (live(t, 2.7, 5.6)) {
+    const i = Math.floor(k), fr = k - i;
+    face(TRAJ[i], F2.x, F2.y, F2.s, 1);
+    if (fr > 0 && i < 24) face(TRAJ[i + 1], F2.x, F2.y, F2.s, fr);
+    face(EDIT[0], F2.x, F2.y, F2.s, tw(t, 4.62, 4.95, E.inOutCubic));   // settle on the finished face
+    frameLine(F2.x, F2.y, F2.s, F2.s, 1);
+  }
+  if (live(t, 2.5, 5.2)) {
+    const a = in2 * (1 - out2);
+    ring(RC.x, RC.y, RC.r, stepN / 25, a);
+    // its rough inner sketch: the latent's token view, next to the ring
+    const tv = a * clamp(in2 * 2);
+    mosaic(tokensAt(k), 1500, RC.y - 150, 300, .06, (r, c) => ({ a: tv * clamp(in2 * 3 - (r + c) / 30) }));
+  }
+  showHead(X.h2, t, 2.55, 4.75, 900, 150, .04);
+  X.odo.set(t < STEP_T0 ? 1 : stepN >= 24.999 ? 25 : stepN);
+  const a2 = live(t, 2.5, 5.2) ? in2 * (1 - out2) : 0;
+  place(X.odo.box, RC.x - 84, RC.y - 70, a2);
+  place(X.stepLbl, RC.x - 44, RC.y - 118, a2);
+  place(X.of25, RC.x - 38, RC.y + 88, a2);
+  place(X.sk, 1500, RC.y + 170, a2);
+  scramble(X.tech2, "for engineers: teacher DiT · 25-step flow ODE · Internal Guidance 1.55 · decoded x̂₀ each step · PCA of the DINOv3 latent",
+           tw(t, 2.9, 3.6, E.lin), t);
+  place(X.tech2, 900, 910, a2);
+
+  // ===== 3. choose: attributes, checked by a second AI =====
+  if (live(t, 5.0, 8.2)) {
+    let cur = 0; EDIT_T.forEach((te, i) => { if (t >= te) cur = i + 1; });
+    const shrink = tw(t, 7.55, 8.05, E.inOutExpo);         // match cut into the scene-4 grid (the tile of seed 4)
+    const tx = lerp(F2.x, 4 * TILE, shrink), ty = lerp(F2.y, GY, shrink), ts = lerp(F2.s, TILE, shrink);
+    const prev = EDIT[Math.max(cur - 1, 0)], now = EDIT[cur];
+    const w = cur === 0 ? 1 : tw(t, EDIT_T[cur - 1], EDIT_T[cur - 1] + .32, E.inOutCubic);
+    face(prev, tx, ty, ts, 1);
+    if (w < 1) {                                            // scan-line wipe from top to bottom
+      ctx.save(); ctx.beginPath(); ctx.rect(tx, ty, ts, ts * w); ctx.clip(); face(now, tx, ty, ts, 1); ctx.restore();
+      ctx.fillStyle = "rgba(255,79,46,.9)"; ctx.fillRect(tx - 8, ty + ts * w - 2, ts + 16, 4);
+      ctx.fillStyle = "rgba(255,79,46,.18)"; ctx.fillRect(tx, ty + ts * w - 40, ts, 40);
+    } else face(now, tx, ty, ts, 1);
+    face(GRID[4], tx, ty, ts, tw(t, 7.85, 8.05, E.inOutCubic));
+    frameLine(tx, ty, ts, ts, 1 - shrink);
+  }
+  const in3 = tw(t, 5.05, 5.6), out3 = tw(t, 7.45, 7.8, E.inCubic);
+  showHead(X.h3, t, 5.05, 7.4, 900, 196, .06);
+  showHead(X.s3, t, 5.25, 7.42, 900, 296, .025);
+  X.chips.forEach((c, i) => {
+    const col = i % 3, row = Math.floor(i / 3);
+    const a = tw(t, 5.2 + i * .03, 5.7 + i * .03), o = tw(t, 7.35 + i * .015, 7.7 + i * .015, E.inExpo);
+    const name = ATTRS[i], ei = M.chain.indexOf(name);
+    const onU = ei >= 0 ? tw(t, EDIT_T[ei], EDIT_T[ei] + .22, E.outExpo) : 0;
+    c.fill.style.transform = `scaleX(${onU})`;
+    c.style.borderColor = onU > .5 ? "var(--accent)" : "var(--faint)";
+    c.nm.style.color = onU > .5 ? "#0b0b0d" : "var(--paper)";
+    const pv = ei >= 0 ? M.probeAt(t, name) : null;
+    c.p.textContent = pv == null ? (onU > .5 ? "…" : "") : `✓ ${Math.round(pv * 100)}%`;
+    c.p.style.color = "#0b0b0d";
+    place(c, 900 + col * 284 - o * 80, 392 + row * 84 + (1 - a) * 40, live(t, 5, 7.9) ? a * (1 - o) : 0);
+  });
+  showHead(X.chk, t, 5.9, 7.42, 900, 740, .02);
+  scramble(X.tech3, "for engineers: same seed, one attribute token set to yes each time · CFG 2.0 · DINOv3 attribute probe p(present)",
+           tw(t, 6.0, 6.7, E.lin), t);
+  place(X.tech3, 900, 910, live(t, 5, 7.9) ? in3 * (1 - out3) : 0);
+
+  // ===== 4. speed: the one-step student =====
+  if (live(t, 7.9, SHUT + .35)) {
+    for (let r = 0; r < 6; r++) for (let c = 0; c < 12; c++) {
+      const idx = r * 12 + c, d = Math.hypot(c - 4, r);
+      const a = tw(t, 8.0 + d * .042, 8.4 + d * .042, E.outBack);
+      if (idx === 4 && t < 8.05) continue;                  // the match-cut tile is still the scene-3 face
+      const s = TILE * (idx === 4 ? 1 : clamp(a, 0, 1.2));
+      if (s < 1) continue;
+      const x = c * TILE + (TILE - s) / 2, y = GY + r * TILE + (TILE - s) / 2;
+      face(GRID[idx], x, y, s, 1);
+      const flash = 1 - tw(t, 8.0 + d * .042, 8.35 + d * .042, E.outCubic);
+      if (flash > 0 && idx !== 4) { ctx.fillStyle = `rgba(241,238,231,${.55 * flash})`; ctx.fillRect(x, y, s, s); }
+    }
+    const dk = tw(t, 8.55, 8.95, E.outCubic);
+    ctx.fillStyle = `rgba(7,8,10,${.5 * dk})`; ctx.fillRect(0, 0, W, H);
+  }
+  const g4 = tw(t, 8.55, 9.0);
+  place(X.glass, 370, 270 + (1 - g4) * 60, live(t, 8.5, SHUT + .3) ? g4 : 0);
+  const tS = M.speed.teacher_s, sS = M.speed.student_ms / 1000;
+  X.sec.textContent = lerp(tS, sS, tw(t, 8.75, 9.45, E.outExpo)).toFixed(2);
+  const race = seg(t, 9.2, 10.2), full = 1060;              // the careful mode's time, squeezed 3:1
+  X.barT.style.width = `${full * race}px`;
+  X.barS.style.width = `${Math.max(20, full * clamp(race * tS / sS) * sS / tS)}px`;
+  X.barTl.textContent = `Careful mode · ${M.teacher_steps} steps · the most realistic`;
+  X.barSl.textContent = "Turbo mode · 1 step";
+  X.barTv.textContent = race > 0 ? `${(tS * race).toFixed(1)} s` : "";
+  X.barTv.style.left = `${Math.min(60 + full * race + 14, 60 + full - 64)}px`;
+  X.barTv.style.opacity = race >= 1 ? 1 : .85;
+  X.barSv.textContent = race > 0 ? `${sS.toFixed(2)} s` : "";
+  X.barSv.style.left = "96px";
+  const fx = tw(t, 9.5, 9.75, E.outBack);
+  X.faster.textContent = `${Math.round(tS / sS)}×`;
+  X.faster.style.opacity = fx; X.fasterL.style.opacity = fx;
+  X.faster.style.transform = `scale(${.7 + .3 * fx})`;
+  X.tech4.textContent = `for engineers: one-step GAN student, FID-50k ${M.metrics.fid_gan.toFixed(1)} vs the teacher's ${M.metrics.fid_after.toFixed(2)} · ` +
+                        `timed on this laptop's ${M.gpu.replace("NVIDIA GeForce ", "")}, median of ${M.speed.runs.student} runs · seeds 0–71`;
+  // shutter wipe: ten accent bars drop in, then retract to reveal scene 5
+  X.shutter.forEach((b, i) => {
+    const d = tw(t, SHUT + i * .018, SHUT + .16 + i * .018, E.inOutCubic), u = tw(t, SHUT + .22 + i * .018, SHUT + .4 + i * .018, E.inOutCubic);
+    b.style.transformOrigin = u > 0 ? "50% 100%" : "50% 0";
+    place(b, i * 192, 0, d > 0 && u < 1 ? 1 : 0, 1, `scaleY(${u > 0 ? 1 - u : d})`);
+  });
+
+  // ===== 5. realism: before / after, the realism gap =====
+  const in5 = tw(t, 10.62, 11.1), out5 = tw(t, 12.55, 12.95, E.inCubic), on5 = live(t, 10.6, 13.0);
+  const BF = { x: 110, y: 400, s: 330 }, AF = { x: 520, y: 400, s: 330 };
+  if (live(t, 10.6, 13.2)) {
+    const bIn = tw(t, 10.62, 11.05, E.outExpo);
+    face(DCGAN, BF.x - (1 - bIn) * 40, BF.y, BF.s, bIn * (1 - out5), true);
+    frameLine(BF.x, BF.y, BF.s, BF.s, bIn * (1 - out5) * .8);
+    const aIn = tw(t, 10.75, 11.2, E.outExpo), mv = tw(t, 12.55, 13.1, E.inOutCubic);   // AFTER travels on to the end card
+    const ax = lerp(AF.x, F6.x, mv), ay = lerp(AF.y, F6.y, mv), as = lerp(AF.s, F6.s, mv);
+    face(MORPH[0], ax + (1 - aIn) * 40, ay, as, aIn);
+    frameLine(ax, ay, as, as, aIn * (1 - mv * .6));
+    // the realism meter (log scale): the marker slides from the old project to HumanDiT
+    const mm = in5 * (1 - out5);
+    if (mm > 0) {
+      ctx.save(); ctx.globalAlpha = mm;
+      const grd = ctx.createLinearGradient(METER.x, 0, METER.x + METER.w, 0);
+      grd.addColorStop(0, "#ff4f2e"); grd.addColorStop(1, "rgba(241,238,231,.25)");
+      ctx.fillStyle = grd; ctx.fillRect(METER.x, METER.y - 3, METER.w * tw(t, 10.7, 11.3, E.inOutCubic), 6);
+      ctx.fillStyle = "rgba(241,238,231,.4)";
+      for (const v of [1, 3, 10, 30, 100, 300]) ctx.fillRect(meterX(v) - 1, METER.y - 12, 2, 24);
+      const fvm = lerp(M.metrics.fid_before, M.metrics.fid_after, tw(t, 11.0, 12.1, E.outExpo));
+      const bx = meterX(M.metrics.fid_before);
+      ctx.fillStyle = "rgba(241,238,231,.35)"; ctx.beginPath(); ctx.arc(bx, METER.y, 9, 0, Math.PI * 2); ctx.fill();
+      const mx = meterX(fvm);
+      ctx.fillStyle = "#ff4f2e"; ctx.beginPath(); ctx.moveTo(mx, METER.y - 16); ctx.lineTo(mx - 14, METER.y - 40); ctx.lineTo(mx + 14, METER.y - 40); ctx.closePath(); ctx.fill();
+      ctx.fillRect(mx - 1.5, METER.y - 16, 3, 32);
+      ctx.restore();
+      X.mB.textContent = `before: ${M.metrics.fid_before.toFixed(1)}`;
+      place(X.mB, bx - 70, METER.y - 58, mm);
+    } else place(X.mB, 0, 0, 0);
+    // arrow between before and after
+    const ar = tw(t, 10.95, 11.35, E.inOutCubic) * (1 - out5);
+    if (ar > 0) {
+      ctx.strokeStyle = "rgba(255,79,46,.95)"; ctx.lineWidth = 3;
+      const x0 = BF.x + BF.s + 22, x1 = x0 + (AF.x - BF.x - BF.s - 44) * ar;
+      ctx.beginPath(); ctx.moveTo(x0, BF.y + BF.s / 2); ctx.lineTo(x1, BF.y + BF.s / 2); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(x1 - 12, BF.y + BF.s / 2 - 10); ctx.lineTo(x1, BF.y + BF.s / 2); ctx.lineTo(x1 - 12, BF.y + BF.s / 2 + 10); ctx.stroke();
+    }
+  } else place(X.mB, 0, 0, 0);
+  showHead(X.h5, t, 10.65, 12.5, 110, 150, .06);
+  place(X.before, BF.x - 12, BF.y - 78, on5 ? in5 * (1 - out5) : 0);
+  place(X.after, AF.x - 12, AF.y - 78, on5 ? tw(t, 10.8, 11.25) * (1 - out5) : 0);
+  const fu = tw(t, 11.0, 12.1, E.outExpo);
+  const fv = lerp(M.metrics.fid_before, M.metrics.fid_after, fu);
+  X.fid.textContent = fv >= 10 ? fv.toFixed(1) : fv.toFixed(2);
+  X.fid.style.color = fu > .985 ? "var(--accent)" : "var(--paper)";
+  place(X.fid, 1030, 380 + (1 - in5) * 50, on5 ? in5 * (1 - out5) : 0);
+  place(X.fidL, 1040, 330, on5 ? in5 * (1 - out5) : 0);
+  place(X.mL, METER.x - 6, METER.y + 22, on5 ? in5 * (1 - out5) : 0);
+  place(X.mR, METER.x + METER.w - 100, METER.y + 22, on5 ? in5 * (1 - out5) * .9 : 0);
+  const STATS = [
+    [`${Math.round(100 * M.metrics.precision)}%`, "of its faces land\namong real photos"],
+    [`${Math.round(100 * M.metrics.recall)}%`, "of real photos' variety\nit can reproduce"],
+    [`${Math.round(100 * M.metrics.control_mean)}%`, "of requested details\ncome out right"],
+    [`0 of ${M.metrics.memo_n.toLocaleString("en")}`, "faces too close to a\nreal training photo"],
+  ];
+  X.stats.forEach((s, i) => {
+    s.v.textContent = STATS[i][0]; s.l.textContent = STATS[i][1];
+    const a = tw(t, 11.45 + i * .1, 11.95 + i * .1);
+    place(s, 110 + i * 440, 800 + (1 - a) * 40, on5 ? a * (1 - out5) : 0);
+    s.style.borderTopColor = a > .98 ? "var(--accent)" : "var(--faint)";
+  });
+  X.tech5.textContent = `for engineers: FID-50k (clean) vs FFHQ-256, ${M.metrics.fid_after_n.toLocaleString("en")} samples, teacher at ${M.teacher_steps} steps · ` +
+                        "precision/recall: DINOv2 k-NN · memorisation: DINOv3 nearest neighbour, 99.9th-percentile threshold";
+  place(X.tech5, 110, 968, on5 ? tw(t, 11.8, 12.2) * (1 - out5) : 0);
+
+  // ===== 6. end card, and the way back to static =====
+  if (t >= 13.0) {
+    const mp = E.inOutCubic(seg(t, 13.1, 14.3)) * (MORPH.length - 1);
+    const i = Math.floor(mp), fr = mp - i;
+    const dz = tw(t, 14.35, 14.75, E.inOutCubic);           // face -> its inner sketch -> static
+    const fly = tw(t, 14.45, 14.98, E.inOutExpo);
+    face(MORPH[i], F6.x, F6.y, F6.s, 1 - dz);
+    if (fr > 0 && i < MORPH.length - 1) face(MORPH[i + 1], F6.x, F6.y, F6.s, fr * (1 - dz));
+    const cols = mix(TOK_STEPS[24], TOK_NOISE, tw(t, 14.55, 14.95, E.inOutCubic));
+    const gx = lerp(F6.x, G1.x, fly), gy = lerp(F6.y, G1.y, fly), gs = lerp(F6.s, G1.s, fly), gap = lerp(0, G1.gap, fly);
+    if (dz > 0) mosaic(cols, gx, gy, gs, gap, (r, c) => ({ a: clamp(dz * 2.2 - hash(r, c) * 1.2), k: lerp(1, .78 + .22 * Math.sin(t * OMEGA + hash(r, c) * 6.283), fly) }));
+    frameLine(gx, gy, gs, gs, (1 - fly) * tw(t, 13.0, 13.3));
+  }
+  X.t6.spans.forEach((s, i) => {
+    const a = tw(t, 13.2 + i * .04, 13.85 + i * .04), b = tw(t, 14.25 + i * .02, 14.55 + i * .02, E.inExpo);
+    s.style.transform = `translateY(${(1 - a) * 110 - b * 110}%)`;
+    s.style.fontVariationSettings = `"wdth" ${lerp(75, 100, tw(t, 13.2 + i * .04, 14.05 + i * .04, E.outCubic)).toFixed(1)}, "wght" 600`;
+  });
+  X.t6.m.style.opacity = t > 13 ? 1 : 0;
+  place(X.t6.m, 960 - 325, 610, t > 13 ? 1 : 0);
+  showHead(X.h6, t, 13.35, 14.3, 310, 790, .035);
+  place(X.s6, 960 - 525, 860, t > 13.3 ? tw(t, 13.6, 13.95) * (1 - tw(t, 14.3, 14.5)) : 0);
+  scramble(X.tech6, `for engineers: RAEv2 · DINOv3 · DiT-DH (${M.metrics.params_m}M) · CMuon · Internal Guidance · one-step GAN · TrustMark · one RTX 4090`,
+           tw(t, 13.6, 14.1, E.lin), t);
+  place(X.tech6, 960 - 560, 918, t > 13.4 ? 1 - tw(t, 14.3, 14.5) : 0);
+}
+
+// ---------------------------------------------------------------- audio cue sheet (read by render.py)
+function cueSheet() {
+  const cues = [{ t: 2.5, t1: 13.0, kind: "pulse" }];
+  SCENES.slice(1).forEach(([t0]) => cues.push({ t: t0, kind: "impact" }));
+  cues.push({ t: 0.15, kind: "title" });
+  [2.5, 8.0, 13.0].forEach(t0 => cues.push({ t: t0 - 1.1, kind: "riser", dur: 1.1 }));
+  for (let s = 2; s <= 25; s++) {                            // one tick per ODE step
+    let lo = STEP_T0, hi = STEP_T1;
+    for (let it = 0; it < 40; it++) { const mid = (lo + hi) / 2; if (stepAt(mid) + 1 >= s) hi = mid; else lo = mid; }
+    cues.push({ t: hi, kind: "tick", v: s / 25 });
+  }
+  EDIT_T.forEach((te, i) => cues.push({ t: te, kind: "swipe", v: i }));
+  for (let r = 0; r < 6; r++) for (let c = 0; c < 12; c++) {
+    const d = Math.hypot(c - 4, r);
+    if (r * 12 + c !== 4) cues.push({ t: 8.0 + d * .042, kind: "pop", pan: (c - 5.5) / 6, v: hash(r, c) });
+  }
+  cues.push({ t: 8.75, kind: "fall", dur: .7 });
+  cues.push({ t: 9.2, kind: "race", dur: 1.0 }); cues.push({ t: 9.5, kind: "chime" });
+  cues.push({ t: SHUT - .05, kind: "shutter", dur: .5 });
+  cues.push({ t: 11.0, kind: "fall", dur: 1.1 }); cues.push({ t: 12.05, kind: "chime" });
+  [0, 1, 2, 3].forEach(i => cues.push({ t: 11.45 + i * .1, kind: "blip", v: i }));
+  cues.push({ t: 13.2, kind: "bell" }); cues.push({ t: 14.3, kind: "reverse", dur: .7 });
+  return cues.sort((a, b) => a.t - b.t);
+}
+
+// ---------------------------------------------------------------- boot
+window.ready = (async () => {
+  M = await (await fetch(ASSETS + "manifest.json")).json();
+  M.chain = M.edits[M.edits.length - 1].on;
+  M.probeAt = (t, name) => {                                 // the probe's verdict on the image currently shown
+    let cur = 0; EDIT_T.forEach((te, i) => { if (t >= te + .16) cur = i + 1; });
+    return cur > 0 && M.edits[cur].on.includes(name) ? M.edits[cur].probe[name] : null;
+  };
+  const q = (n, f) => Promise.all([...Array(n).keys()].map(f));
+  [TRAJ, EDIT, GRID, MORPH, DCGAN] = await Promise.all([
+    q(M.trajectory_steps, i => img(`traj_${pad(i)}.png`)),
+    q(M.edits.length, i => img(`edit_${i}.png`)),
+    q(M.grid_seeds[1] + 1, i => img(`grid_${pad(i)}.png`)),
+    q(M.morph.frames, i => img(`morph_${pad(i)}.png`)),
+    img("dcgan.png"),
+  ]);
+  TOK_NOISE = Float32Array.from(M.tokens.noise, v => clamp(128 + (v - 128) * 1.7, 0, 255));
+  TOK_STEPS = M.tokens.steps.map(a => Float32Array.from(a));
+  await document.fonts.ready;
+  build();
+  window.renderAt = renderAt;
+  window.CUES = cueSheet();
+  const P = new URLSearchParams(location.search);
+  const fit = () => { const s = Math.min(innerWidth / W, innerHeight / H); document.getElementById("stage").style.transform = `scale(${s})`; };
+  if (!P.has("render")) { fit(); addEventListener("resize", fit); }
+  if (P.has("play")) {
+    const t0 = performance.now();
+    const loop = () => { renderAt((performance.now() - t0) / 1000); requestAnimationFrame(loop); };
+    loop();
+  } else renderAt(parseFloat(P.get("t") || "0"));
+  return true;
+})();
+</script>
+</body>
+</html>
