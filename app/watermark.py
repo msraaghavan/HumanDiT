@@ -25,6 +25,11 @@ def _tm(device: str = "cpu"):
     return TrustMark(verbose=False, model_type="Q", device=device, loadRemover=False)
 
 
+def load_watermarker(device: str = "cpu") -> None:
+    """Load (and on first use download) TrustMark's weights now rather than inside the first job."""
+    _tm(device)
+
+
 def add_watermark(img: Image.Image, device: str = "cpu") -> Image.Image:
     return _tm(device).encode(img.convert("RGB"), MARK, MODE="text")
 

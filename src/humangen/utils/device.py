@@ -45,18 +45,20 @@ def xla_device() -> torch.device | None:
 
 
 def get_precision(force: str | None = None) -> Precision:
+    """`force` ("fp32" / "bf16", or the HUMANGEN_PRECISION environment variable) skips the capability check. That
+    matters on Hugging Face ZeroGPU, where no real GPU is attached until a job runs."""
+    force = force or os.environ.get("HUMANGEN_PRECISION") or None
     xdev = xla_device()
     if xdev is not None:
         return Precision(xdev, None if force == "fp32" else torch.bfloat16)
     if not torch.cuda.is_available():
         return Precision(torch.device("cpu"), None)
     dev = torch.device("cuda")
-    major, _ = torch.cuda.get_device_capability(dev)
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
     if force == "fp32":
         return Precision(dev, None)
-    if force == "bf16" or (force is None and major >= 8):
+    if force == "bf16" or torch.cuda.get_device_capability(dev)[0] >= 8:
         return Precision(dev, torch.bfloat16)
     return Precision(dev, None)
 

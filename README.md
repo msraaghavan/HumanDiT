@@ -158,38 +158,77 @@ Teacher: 46,708 steps, 11.96M samples, 10.8 h on NVIDIA GeForce RTX 4090 (182.9M
 
 <!-- RESULTS:END -->
 
-## Live demo (runs on a 4 GB laptop GPU)
+## Live demo: a motion-designed website
 
-`uv run --extra demo python app/gradio_app.py` starts a Gradio app on the GTX 1650 Ti laptop. It loads the teacher,
-the one-step **fixed GAN** student and the probe, and falls back to ONNX Runtime on CPU-only machines. The page is
-written for someone with no machine-learning background. There is plain language throughout, a four-picture "how it
-works" strip, and the 15-second showreel as a muted header. Every tab fills itself in when opened, so nothing is empty
-and nothing needs a second click. Sampler settings, the probe's raw scores and the metrics live in an *engineers*
-drawer and tab. The screenshots below are taken by [`scripts/demo_screenshots.py`](scripts/demo_screenshots.py),
-driving the real app in Edge. All timings are live on the laptop and CUDA-synchronised.
+`uv run --extra demo python app/gradio_app.py` serves the demo on the GTX 1650 Ti laptop, and the same app deploys
+unchanged as a Hugging Face Space ([below](#deploy-a-hugging-face-space-zerogpu)). It is written for someone with no
+machine-learning background: plain words, no jargon on the surface, and every tab fills itself in when opened, so
+nothing starts empty and nothing needs a second click. The motion is the explanation: the page shows what the model
+does rather than describing it. Sampler settings, the probe's raw scores and every metric sit in an *engineers*
+drawer and tab. The screenshots are taken by [`scripts/demo_screenshots.py`](scripts/demo_screenshots.py), driving
+the real app in Edge, and [`scripts/demo_check.py`](scripts/demo_check.py) exercises every tab in a browser (17/17
+checks pass: every tool returns its result, dark mode, no Gradio footer, no emoji, no JavaScript errors).
+
+![demo: the opening](docs/assets/demo_hero.jpg)
+
+**The motion design** ([`app/web/`](app/web/): one stylesheet and one script, no libraries), dark neon throughout:
+- **The page denoises itself** when it opens: full-screen static clears from the headline outwards, once per visit.
+- **The opening.** The headline rises word by word, and "who don't exist." flickers on like a neon tube. The measured
+  numbers count to their values: the realism gap counts *down* from the first version's 177.6 to 3.41.
+- **A wall of 72 uncurated invented faces** drifts behind it. Faces re-invent themselves through a burst of static, the
+  cursor is a torch that lights the faces near it, and the showreel's monitor tilts toward it.
+- **How it works plays itself**, left to right: static; the teacher's 25 real drafts, each under the static that is
+  still left at that step (x_t = t·noise + (1−t)·x̂₀); the finished face developing; then glasses, a smile, grey hair
+  and bangs added one at a time, each with the checker's score.
+- **While a job runs**, its output fills with static that slowly calms down, with a live timer. The results then
+  develop out of the static and their captions rise in; "Made 8 faces in 2.4 s" counts up.
+- **Instant or best?** replays each run's live timing as a race at its real speed, then grows the realism-gap bars.
+  **Change one thing** sweeps a wipe between *without* and *with*. **Watch it draw** and **Blend** carry a step
+  counter and an A-to-B bar synced to the video. **Is it AI-made?** scans the picture with a laser grid, then stamps
+  the verdict. The **engineers' tab** grows a log-scale scoreboard of every model's measured FID-50k.
+- Every picture in the motion is a model output and every number is measured ([`scripts/showreel/build_web.py`](scripts/showreel/build_web.py)
+  packs them). `prefers-reduced-motion` shows every final state with no movement.
+
+**It must not lag**, so the frame rate is measured by [`scripts/motion_fps.py`](scripts/motion_fps.py): every
+`requestAnimationFrame` interval over a few seconds per scene, in Edge on the laptop, whose display runs at 120 Hz.
+The first version dropped frames, badly when the cursor moved over the wall. The rewrite paints the wall once into a
+cached layer and slides it, pre-generates the static, redraws noisy canvases at 30 fps at capped resolution, and has no
+backdrop blur. It also stopped animating the tabs block into view: rasterising it as one layer cost a 167 ms frame.
+
+| Scene | Before (headless Edge) | After (headless Edge) | After (Edge window, GPU) |
+|---|---|---|---|
+| Opening: hero, reel, wall | 62 fps, 4.5% of frames > 25 ms | 118 fps, 0.2% | 85 fps, 2.4% |
+| How it works | 60 fps, 5.8% | 118 fps, 0.4% | 96 fps, 1.8% |
+| Cursor over the wall | 43 fps, 36% | 84 fps, 2.0% | 105 fps, 0.3% |
+| Scrolling | 70 fps, 7.7% | 99 fps, 1.4% | 118 fps, 0.0% |
 
 **Make faces:** tick what each face *must have* and *must not have*. Under each face, the checker (the DINOv3 probe)
 marks ✓ what came out as asked and ✗ what didn't. The run below asked for glasses, blond hair and a smile, and not a
-man: 8 faces in 2.2 s. The generator takes 74 ms/face, the RAEv2 decoder 169 ms/face and the TrustMark watermark
-36 ms/face. The checker flags 2 misses out of 32 checks: a missing smile and hair it did not read as blond. Every
+man: 8 faces in 2.4 s. The generator takes 75 ms a face, the RAEv2 decoder 189 ms and the TrustMark watermark
+37 ms. The checker flags 2 misses out of 32 checks: a missing smile and hair it did not read as blond. Every
 downloaded PNG carries "AI-generated" metadata with its sampler, seed and attributes. If you ask the one-step student
 for a feature it rendered less than half the time in evaluation (goatee, sideburns, beard), the page says so and
 suggests *Best quality*.
 
 ![demo: make faces](docs/assets/demo_generate.jpg)
 
-Two demo fixes came out of these screenshots:
-- **Decoding in chunks.** Decoding all 8 faces in one batch overflowed the laptop's 4 GB into shared system memory,
-  at 3.97 s per face instead of 0.17 s. The decoder now takes 4 faces at a time.
-- **Warm-up at start-up.** The server now runs every path once (CUDA kernels, TrustMark) before the page opens, so a
-  first visitor's 4 faces took 1.3 s instead of 14.7 s.
+Three fixes to the demo came from testing it on the 4 GB laptop GPU:
+- **Faces per GPU call.** With a feature ticked, the teacher took 3.48, 3.40 and 3.55 s a face at batches of 1, 2 and
+  4, but 33 s a face at 8, where it overflows into shared system memory (8 *Best quality* faces: 263 s). With a
+  browser also holding video memory, a 3-face edit overflowed too. Small GPUs now take 2 faces per call, which costs
+  nothing; large GPUs take 8. The decoder had the same problem (4.0 s a face instead of 0.17 s).
+- **Warm-up at start-up.** The server runs every path once before the page opens, so a first visitor's 4 faces took
+  1.3 s instead of 14.7 s.
+- **One GPU queue.** Every job shares one Gradio concurrency queue, so two tabs never fight over the GPU.
 
 **Instant or best?:** the same starting noise through the one-step GAN and the teacher at 10, 25 and 50 steps:
-0.08 s, 0.80 s, 1.98 s and 4.18 s. Under the pictures is each setting's realism gap (FID, lower is better): 20.0, 5.9
-(FID-10k; no 50k run exists at 10 steps), 3.4 and 3.8. The teacher defaults to **25 steps** everywhere in the demo. At
-the tuned guidance it beat 50 steps on FID-50k (3.41 vs 3.78) with the same FD_DINOv2 and precision, in half the time
-(table above). For this seed the GAN draws a different child than the teacher does: its training ties only its anchor
-noises to teacher outputs, so a new seed need not map to the teacher's face.
+0.13, 1.21, 2.64 and 4.62 s with the page open in a browser on the same laptop (shown); 0.08, 0.75, 1.85 and 3.73 s
+through the API with no browser open. On one laptop the page's rendering and the model share the machine; on the
+Space they do not. Beside the race is each setting's realism gap (FID, lower is better): 20.0, 5.9 (FID-10k; no
+50k run exists at 10 steps), 3.4 and 3.8. The teacher defaults to **25 steps** everywhere in the demo. At the tuned guidance it beat
+50 steps on FID-50k (3.41 vs 3.78) with the same FD_DINOv2 and precision, in half the time (table above). For this
+seed the GAN draws a different child than the teacher does: its training ties only its anchor noises to teacher
+outputs, so a new seed need not map to the teacher's face.
 
 ![demo: instant or best](docs/assets/demo_compare.jpg)
 
@@ -209,6 +248,41 @@ encoding, and all 16 frames of a test video still carried the mark.
 a face from this project's first version, which has no mark (not found).
 
 ![demo: is it AI-made](docs/assets/demo_watermark.jpg)
+
+**For engineers:** the measured FID-50k of every model this project trained, log scale.
+
+![demo: the scoreboard](docs/assets/demo_scoreboard.jpg)
+
+<img src="docs/assets/demo_mobile.jpg" width="300" align="right" alt="the demo's opening on a phone">
+
+**On a phone** the page reflows to one column (the phone shot is 390 px wide).
+
+<br clear="right">
+
+## Deploy: a Hugging Face Space (ZeroGPU)
+
+The website runs without the laptop as a Hugging Face Space on **ZeroGPU**, which lends each job a slice of an NVIDIA
+RTX Pro 6000 (48 GB). Free accounts in good standing (verified email, older than 30 days) can host up to 2 ZeroGPU
+Spaces; visitors get 2 minutes of GPU a day without logging in and 5 with a free account. Two repos take part:
+- a **model repo** with the weights, the probe and every measured result (`runs/eval*`), which the Space downloads at
+  start-up; the RAEv2 decoder comes from its authors' repo;
+- the **Space**: [`space/app.py`](space/app.py), the app, the `humangen` package and the page's assets.
+
+ZeroGPU attaches a GPU only while a job runs, so every job is wrapped in `spaces.GPU` (a no-op elsewhere), models are
+placed at start-up, the precision comes from `HUMANGEN_PRECISION` instead of a capability query, and the warm-up is
+skipped. ZeroGPU supports PyTorch 2.8–2.13 on Python 3.12, so the Space is tested on that stack as well as this
+repo's 3.14 / 2.14: in a Python 3.12 + torch 2.13 environment the 27 tests that do not need the training extras pass,
+and the assembled Space folder, run exactly as the Space would, makes faces and checks both watermark examples in a
+browser (on the CPU there).
+
+```bash
+uv run python scripts/build_space.py --model-repo USER/HumanDiT --github https://github.com/USER/REPO
+hf auth login                                           # yourself; a write token
+hf upload USER/HumanDiT dist/model . --repo-type model
+hf upload USER/HumanDiT-demo dist/space . --repo-type space   # then Settings -> Hardware -> ZeroGPU
+```
+
+Test the Space before uploading: `cd dist/space && HUMANDIT_MODEL_DIR=../model python app.py`.
 
 ## How it works
 
@@ -310,6 +384,10 @@ uv run --extra demo python scripts/export_onnx.py --student runs/student_gan_fix
 uv run --extra demo python app/gradio_app.py            # live demo
 uv run --extra demo python scripts/showreel/build_assets.py   # the reel's faces, live timings and metrics
 uv run --extra demo python scripts/showreel/render.py         # the 15-second reel -> docs/assets/showreel.*
+uv run python scripts/showreel/build_web.py             # the website's sprites, numbers and 960x540 reel
+uv run python scripts/demo_check.py                     # every tab of the running demo, in a browser
+uv run python scripts/motion_fps.py                     # the website's frame rate, per scene
+uv run python scripts/build_space.py --model-repo USER/HumanDiT   # the Hugging Face upload folders (dist/)
 ```
 
 ## Before → after

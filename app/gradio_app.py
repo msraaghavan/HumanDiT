@@ -4,18 +4,37 @@ instant vs best quality, check the watermark. Everything technical lives in one 
     uv run --extra demo python app/gradio_app.py
     uv run --extra demo python app/gradio_app.py --teacher runs/teacher_b/ckpt/ema.safetensors \
         --student runs/student_gan_fixed/student.safetensors --probe runs/attributes/attribute_probe.pt
+
+On a Hugging Face ZeroGPU Space (space/app.py) a GPU is attached only while a job runs: every job below is wrapped in
+`gpu(...)`, which is `spaces.GPU` there and does nothing anywhere else.
 """
 
 from __future__ import annotations
 
 import argparse
 import base64
+import html
+import io
 import json
+import os
 import random
 import sys
 import tempfile
 import time
 from pathlib import Path
+from urllib.parse import quote
+
+try:  # Hugging Face ZeroGPU; imported before torch touches CUDA
+    import spaces
+
+    ZERO_GPU = os.environ.get("SPACES_ZERO_GPU", "").lower() in {"1", "true"}  # set by Hugging Face
+    gpu = spaces.GPU
+except ImportError:
+    ZERO_GPU = False
+
+    def gpu(fn=None, **_):
+        return fn if fn is not None else (lambda f: f)
+
 
 import gradio as gr
 import numpy as np
@@ -23,7 +42,7 @@ import torch
 from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from watermark import add_watermark, check_watermark, provenance_pnginfo
+from watermark import add_watermark, check_watermark, load_watermarker, provenance_pnginfo
 
 from humangen.data.attributes import Probe
 from humangen.diffusion.guidance import GuidanceConfig, guided_model_fn
@@ -54,18 +73,6 @@ TEACHER_EVALS = (
     (50, ("teacher_tuned", "teacher_ig1.55_10k")),
 )
 
-# The header reel (docs/assets/showreel.mp4) carries a soundtrack; browsers only autoplay muted video, and gr.Video has
-# no `muted` option, so mute it as it appears (its controls can unmute it) and keep it playing.
-REEL_MUTED = """<script>
-new MutationObserver(() => document.querySelectorAll("#reel video").forEach(v => {
-  if (!v.dataset.muted) { v.dataset.muted = 1; v.muted = true; v.play().catch(() => {}); }
-})).observe(document.documentElement, { childList: true, subtree: true });
-// browsers may pause muted video while the page is hidden: resume the tour when it is shown again
-document.addEventListener("visibilitychange", () => {
-  if (!document.hidden) document.querySelectorAll("#reel video").forEach(v => v.play().catch(() => {}));
-});
-</script>"""
-
 
 class Engine:
     def __init__(
@@ -79,10 +86,17 @@ class Engine:
     ):
         self.prec = get_precision()
         self.dev = self.prec.device
+        self.chunk = chunk_size(self.dev)
         self.transport = Transport(shift=dimension_shift(1024 * 16 * 16))
         self.wm_device = (
             ("cuda" if self.dev.type == "cuda" else "cpu") if watermark_device == "auto" else watermark_device
         )
+        try:  # load TrustMark now: on ZeroGPU, models must be placed at start-up, not inside a job
+            load_watermarker(self.wm_device)
+        except Exception as err:
+            print(f"[demo] TrustMark on {self.wm_device} failed ({err}); watermarking on the CPU")
+            self.wm_device = "cpu"
+            load_watermarker("cpu")
         # Without CUDA, the 1-step mode and the decoder run through ONNX Runtime (scripts/export_onnx.py),
         # about 1.2x faster than eager PyTorch on CPU.
         self.ort_gen = self.ort_dec = None
@@ -163,6 +177,12 @@ class Engine:
 
     @torch.no_grad()
     def sample(self, noise, attrs, mode: str, steps: int, cfg: float, ig: float, trajectory: bool = False):
+        if not trajectory and len(noise) > self.chunk:
+            parts = [
+                self.sample(n, a, mode, steps, cfg, ig)[0]
+                for n, a in zip(noise.split(self.chunk), attrs.split(self.chunk), strict=True)
+            ]
+            return torch.cat(parts), []
         with self.prec.autocast():
             if mode == self.fast_mode and self.ort_gen is not None:
                 z = self.ort_gen.run(
@@ -181,7 +201,7 @@ class Engine:
         imgs = []
         # The ViT-XL decoder's activations for 8 faces at once overflow a 4 GB GPU into shared system memory
         # (about 4 s a face instead of 0.16 s on the GTX 1650 Ti), so decode a few at a time.
-        for zc in z.split(DECODE_CHUNK):
+        for zc in z.split(self.chunk):
             if self.ort_dec is not None:
                 x = torch.from_numpy(self.ort_dec.run(None, {"latent": zc.float().cpu().numpy()})[0])
             else:
@@ -194,13 +214,22 @@ class Engine:
         """Run every path once before the page opens (CUDA kernels, cuDNN autotuning, TrustMark), so the first
         visitor's timings are the steady-state ones rather than one-off start-up costs."""
         t0 = time.perf_counter()
-        noise, a = self.noise(0, DECODE_CHUNK), self.attrs([], DECODE_CHUNK)
+        noise, a = self.noise(0, self.chunk), self.attrs([], self.chunk)
         for mode in self.modes:
             z, _ = self.sample(noise, a, mode, 2, 2.0, IG_TUNED)
             self.decode(z)
             self.probs(z)
         self.sync()
         print(f"[demo] warmed up in {time.perf_counter() - t0:.1f} s")
+
+    def gpu_name(self) -> str:
+        """Call inside a job: on ZeroGPU the GPU exists only there."""
+        if self.dev.type != "cuda":
+            return "the CPU"
+        try:
+            return torch.cuda.get_device_name()
+        except RuntimeError:
+            return "a shared cloud GPU"
 
     def mark(self, imgs: list[Image.Image]) -> list[Image.Image]:
         return [add_watermark(im, self.wm_device) for im in imgs]
@@ -231,41 +260,367 @@ PLAIN = {
     "Smiling": "Smile",
     "Mouth_Open": "Open mouth",
 }
-FAST, BEST = "⚡ Instant", "✨ Best quality"
-DECODE_CHUNK = 4  # faces per decoder call
+FAST, BEST = "Instant", "Best quality"
+
+
+def chunk_size(dev: torch.device) -> int:
+    """Faces per GPU call. Measured on the 4 GB GTX 1650 Ti (teacher, 25 steps, CFG on): 3.48 / 3.40 / 3.55 s a face
+    at batches of 1 / 2 / 4, but 33 s at 8, where it overflows into shared system memory (the decoder: 4.0 s a face
+    instead of 0.17). With a browser also holding video memory, a 3-face edit overflowed too, so small GPUs take 2
+    faces per call, which costs nothing; large ones take 8."""
+    if dev.type != "cuda" or ZERO_GPU:  # ZeroGPU: no GPU is attached at start-up, and it has 48 GB
+        return 8
+    try:
+        return 2 if torch.cuda.get_device_properties(dev).total_memory < 8 * 2**30 else 8
+    except RuntimeError:
+        return 8
+
+
 # how a "Must NOT have" tick reads under a face
 NOT = {"Man": "not a man", "Smile": "no smile", "Open mouth": "mouth closed"}
-HOW = (  # the header's four-step strip: (image, title, one line)
-    ("1_static.jpg", "1 · Random static", "Every face starts as pure noise."),
-    ("2_cleaning.jpg", "2 · Cleaning up", "The AI removes a little noise, 25 times."),
-    ("3_face.jpg", "3 · A new face", "Someone who has never existed."),
-    ("4_choices.jpg", "4 · Your choices", "Add glasses, a smile, grey hair…"),
+# the how-it-works stage: (title, one line, the label on its animated picture before the script takes over)
+HOW = (
+    ("Random static", "Every face starts as pure noise.", "pure noise"),
+    ("Cleaning up", f"The AI removes a little noise, {TEACHER_STEPS} times.", "step 01 / 25"),
+    ("A new face", "Someone who has never existed.", "not a real person"),
+    ("Your choices", "Add glasses, a smile, grey hair…", "no extras"),
 )
-THEME = gr.themes.Soft(
-    primary_hue=gr.themes.colors.orange,
-    neutral_hue=gr.themes.colors.stone,
-    font=[gr.themes.GoogleFont("Inter"), "system-ui", "sans-serif"],
-)
-CSS = """
-.gradio-container { max-width: 1280px !important; margin: auto; }
-#intro h1 { font-size: 2.3rem; margin-bottom: .3rem; }
-#intro p { font-size: 1.12rem; line-height: 1.55; }
-#how { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-top: 6px; }
-#how figure { margin: 0; }
-#how img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 14px; display: block; }
-#how figcaption { margin-top: 8px; font-size: .95rem; line-height: 1.35; }
-#how figcaption b { display: block; font-size: 1.02rem; }
-button[role="tab"] { font-size: 1.05rem !important; padding: 10px 16px !important; }
-.lead { font-size: 1.08rem; }
-#make-btn, #make-btn button { font-size: 1.25rem !important; min-height: 56px; }
-#verdict { font-size: 1.35rem; }
-/* the checker's ticks under each face: wrap instead of cutting off */
-.caption-label { white-space: normal !important; text-overflow: clip !important; max-width: 94% !important; line-height: 1.3; }
-"""
 
 
-def data_uri(path: Path) -> str:
-    return "data:image/jpeg;base64," + base64.b64encode(path.read_bytes()).decode()
+def neon_theme() -> gr.themes.Base:
+    """Dark neon: electric cyan and hot magenta on near-black. Light-mode variables get the same values as dark ones,
+    so the page is dark whatever the visitor's system setting (head_html also asks Gradio for dark mode)."""
+    cyan, text, dim, line, line2 = (
+        "#00e5ff",
+        "#e9f6ff",
+        "#8d98b8",
+        "rgba(0, 229, 255, 0.28)",
+        "rgba(124, 92, 255, 0.22)",
+    )
+    panel, field = "rgba(11, 15, 30, 0.82)", "#080b16"
+    glow = "0 0 22px rgba(0, 229, 255, 0.35)"
+    v = {
+        "body_background_fill": "#05060b",
+        "body_text_color": text,
+        "body_text_color_subdued": dim,
+        "background_fill_primary": "#0a0d1a",
+        "background_fill_secondary": "#070912",
+        "border_color_primary": line2,
+        "border_color_accent": cyan,
+        "border_color_accent_subdued": line,
+        "color_accent_soft": "rgba(0, 229, 255, 0.12)",
+        "block_background_fill": panel,
+        "block_border_color": line2,
+        "block_border_width": "1px",
+        "block_shadow": "none",
+        "block_info_text_color": dim,
+        "block_label_background_fill": "rgba(5, 6, 11, 0.9)",
+        "block_label_border_color": line,
+        "block_label_border_width": "1px",
+        "block_label_text_color": cyan,
+        "block_title_background_fill": "rgba(0, 229, 255, 0.1)",
+        "block_title_border_color": line,
+        "block_title_border_width": "0px",
+        "block_title_text_color": cyan,
+        "panel_background_fill": "#0a0d1a",
+        "panel_border_color": line2,
+        "panel_border_width": "1px",
+        "accordion_text_color": text,
+        "input_background_fill": field,
+        "input_background_fill_focus": field,
+        "input_background_fill_hover": "#0b0f1f",
+        "input_border_color": line2,
+        "input_border_color_focus": cyan,
+        "input_border_color_hover": line,
+        "input_border_width": "1px",
+        "input_placeholder_color": dim,
+        "input_shadow": "none",
+        "input_shadow_focus": "0 0 0 1px #00e5ff, 0 0 16px rgba(0, 229, 255, 0.35)",
+        "checkbox_background_color": field,
+        "checkbox_background_color_hover": "#0b0f1f",
+        "checkbox_background_color_focus": field,
+        "checkbox_background_color_selected": cyan,
+        "checkbox_border_color": "rgba(148, 163, 255, 0.4)",
+        "checkbox_border_color_hover": cyan,
+        "checkbox_border_color_focus": cyan,
+        "checkbox_border_color_selected": cyan,
+        "checkbox_border_width": "1px",
+        "checkbox_label_background_fill": "rgba(13, 18, 34, 0.9)",
+        "checkbox_label_background_fill_hover": "rgba(0, 229, 255, 0.08)",
+        "checkbox_label_background_fill_selected": "rgba(0, 229, 255, 0.16)",
+        "checkbox_label_border_color": line2,
+        "checkbox_label_border_color_hover": line,
+        "checkbox_label_border_color_selected": cyan,
+        "checkbox_label_border_width": "1px",
+        "checkbox_label_shadow": "none",
+        "checkbox_label_shadow_hover": "none",
+        "checkbox_label_shadow_active": "none",
+        "checkbox_label_text_color": text,
+        "checkbox_label_text_color_selected": "#ffffff",
+        "slider_color": cyan,
+        "loader_color": cyan,
+        "button_border_width": "1px",
+        "button_primary_background_fill": "linear-gradient(90deg, #00e5ff, #7c5cff 55%, #ff3df0)",
+        "button_primary_background_fill_hover": "linear-gradient(90deg, #5cf0ff, #9a80ff 55%, #ff6ff4)",
+        "button_primary_border_color": "rgba(0, 229, 255, 0.6)",
+        "button_primary_border_color_hover": cyan,
+        "button_primary_text_color": "#04050a",
+        "button_primary_text_color_hover": "#04050a",
+        "button_primary_shadow": glow,
+        "button_primary_shadow_hover": "0 0 30px rgba(0, 229, 255, 0.55), 0 0 60px rgba(255, 61, 240, 0.25)",
+        "button_primary_shadow_active": "0 0 12px rgba(0, 229, 255, 0.5)",
+        "button_secondary_background_fill": "rgba(13, 18, 34, 0.9)",
+        "button_secondary_background_fill_hover": "rgba(0, 229, 255, 0.1)",
+        "button_secondary_border_color": line,
+        "button_secondary_border_color_hover": cyan,
+        "button_secondary_text_color": text,
+        "button_secondary_text_color_hover": "#ffffff",
+        "button_secondary_shadow": "none",
+        "button_secondary_shadow_hover": "0 0 18px rgba(0, 229, 255, 0.3)",
+        "button_secondary_shadow_active": "none",
+        "table_border_color": line2,
+        "table_even_background_fill": "#0a0e1a",
+        "table_odd_background_fill": "#0d1222",
+        "table_row_focus": "rgba(0, 229, 255, 0.08)",
+        "table_text_color": text,
+        "code_background_fill": "#0a0e1a",
+        "link_text_color": cyan,
+        "link_text_color_hover": "#5cf0ff",
+        "link_text_color_active": cyan,
+        "link_text_color_visited": "#b08cff",
+        "stat_background_fill": "rgba(0, 229, 255, 0.2)",
+        "shadow_spread": "0px",
+        "error_background_fill": "rgba(255, 77, 109, 0.08)",
+        "error_border_color": "#ff4d6d",
+        "error_border_width": "1px",
+        "error_icon_color": "#ff4d6d",
+        "error_text_color": "#ff8fa3",
+    }
+    base = gr.themes.Base(
+        primary_hue=gr.themes.colors.cyan,
+        secondary_hue=gr.themes.colors.fuchsia,
+        neutral_hue=gr.themes.colors.slate,
+        radius_size=gr.themes.sizes.radius_lg,
+        font=[gr.themes.GoogleFont("Inter"), "system-ui", "sans-serif"],
+        font_mono=[gr.themes.GoogleFont("JetBrains Mono"), "ui-monospace", "monospace"],
+    )
+    return base.set(**v, **{k + "_dark": x for k, x in v.items()})
+
+
+THEME = neon_theme()
+WEB_SRC = Path(__file__).resolve().parent / "web"  # the motion layer: motion.css + motion.js
+WEB = ASSETS / "web"  # its model outputs and numbers (scripts/showreel/build_web.py)
+CSS = (WEB_SRC / "motion.css").read_text(encoding="utf-8")
+FONTS = (
+    '<link rel="preconnect" href="https://fonts.googleapis.com">'
+    '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
+    '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..900'
+    '&family=JetBrains+Mono:wght@500;600&display=swap">'
+)
+
+
+def file_url(path: Path) -> str:
+    """URL of a file under `allowed_paths`, relative to the page, so it also works behind a proxy (HF Spaces)."""
+    try:
+        rel = Path(os.path.relpath(path, Path.cwd()))
+    except ValueError:  # another drive on Windows
+        rel = path
+    return "gradio_api/file=" + quote(rel.as_posix())
+
+
+def jpeg_uri(img: Image.Image, quality: int = 90) -> str:
+    buf = io.BytesIO()
+    img.convert("RGB").save(buf, "JPEG", quality=quality)
+    return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
+
+
+def head_html() -> str:
+    js = (WEB_SRC / "motion.js").read_text(encoding="utf-8")
+    base = file_url(WEB) + "/"
+    # dark whatever the visitor's system says: ask Gradio (?__theme=dark; on HF Spaces the Hub passes its own theme),
+    # and hold its "dark" class on <body> (Gradio leaves it off when the system is in light mode)
+    dark = (
+        "<script>(() => { const u = new URL(location.href); if (u.searchParams.get('__theme') !== 'dark') "
+        "{ u.searchParams.set('__theme', 'dark'); history.replaceState(history.state, '', u); } "
+        "const hold = () => { if (!document.body.classList.contains('dark')) document.body.classList.add('dark'); }; "
+        "const start = () => { hold(); new MutationObserver(hold).observe(document.body, "
+        "{ attributes: true, attributeFilter: ['class'] }); }; "
+        # Gradio inserts this <head> content after the page has loaded, so the load event may be long gone
+        "if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start(); "
+        "})();</script>"
+    )
+    return dark + FONTS + f"<script>window.HD_BASE = {json.dumps(base)};</script><script>{js}</script>"
+
+
+def hero_html() -> str:
+    """The page's opening: kinetic headline, measured numbers that count to their values, a drifting wall of
+    invented faces, and the 15-second showreel in a 'monitor'. Readable as plain HTML if the script never runs."""
+    m = json.loads((WEB / "motion.json").read_text()) if (WEB / "motion.json").exists() else None
+    head = ["Faces", "of", "people"]
+    hi = ["who", "don't", "exist."]
+    h1 = " ".join(f'<span class="w" style="--i:{i}"><span>{w}</span></span>' for i, w in enumerate(head))
+    h1 += (
+        '<br><span class="hl">'
+        + " ".join(
+            f'<span class="w" style="--i:{len(head) + j};--j:{j}"><span>{html.escape(w)}</span></span>'
+            for j, w in enumerate(hi)
+        )
+        + "</span>"
+    )
+    stats = ""
+    if m:
+        sp, mt = m["speed"], m["metrics"]
+        copies = round(mt["memorised"] * mt["memo_n"])
+        rows = (
+            (
+                f"{sp['student_ms'] / 1000:.2f}",
+                "s",
+                f'data-from="{sp["teacher_s"]:.2f}" data-dec="2"',
+                f"per face in Instant mode, on a laptop GPU (careful mode: {sp['teacher_s']:.1f} s)",
+            ),
+            (
+                f"{mt['fid_after']:.2f}",
+                "",
+                f'data-from="{mt["fid_before"]:.2f}" data-dec="2"',
+                f"realism gap, lower is better (the first version: {mt['fid_before']:.1f})",
+            ),
+            (
+                str(mt["n_attributes"]),
+                "",
+                'data-from="0" data-dec="0"',
+                "features you can ask for, or rule out",
+            ),
+            (
+                str(copies),
+                f" / {mt['memo_n']:,}",
+                "data-scramble",
+                "invented faces that copy a real person's photo",
+            ),
+        )
+        stats = (
+            '<div class="hd-stats">'
+            + "".join(
+                f'<div class="hd-stat" style="--i:{i}"><b data-to="{v}" {attrs}>{v}<small>{unit}</small></b>'
+                f"<span>{html.escape(label)}</span></div>"
+                for i, (v, unit, attrs, label) in enumerate(rows)
+            )
+            + "</div>"
+        )
+    # the hero plays the 960x540 web encode (build_web.py): decoding the 1080p master cost the page frames
+    reel = WEB / "reel.mp4" if (WEB / "reel.mp4").exists() else ASSETS / "showreel.mp4"
+    poster = ASSETS / "showreel_poster.jpg"
+    monitor = ""
+    if reel.exists():
+        monitor = (
+            '<div class="hd-monitor"><div class="hd-box"><div class="hd-screen">'
+            f'<video src="{file_url(reel)}" poster="{file_url(poster) if poster.exists() else ""}" autoplay muted loop '
+            'playsinline preload="auto" aria-label="A 15-second showreel made from this AI\'s own pictures"></video>'
+            '</div><span class="hd-corner tl"></span><span class="hd-corner tr"></span><span class="hd-corner bl">'
+            '</span><span class="hd-corner br"></span></div>'
+            '<div class="hd-hud"><span>Showreel</span><span class="hd-tc">00:00.0 / 00:15.0</span>'
+            '<span class="hd-prog"><i></i></span><button class="hd-sound" type="button">Sound off</button></div>'
+            '<div class="hd-cap">A 15-second tour, made entirely from this AI\'s own pictures.</div></div>'
+        )
+    return (
+        '<section class="hd-hero"><canvas class="hd-wall" aria-hidden="true"></canvas><div class="hd-hero-grid">'
+        '<div class="hd-copy"><div class="hd-over"><span class="hd-dot"></span>'
+        '<span class="hd-over-t">HumanDiT · an AI that invents faces</span></div>'
+        f'<h1 class="hd-h1">{h1}</h1>'
+        '<p class="hd-sub">This AI invents realistic faces from scratch. <b>None of these people are real.</b> '
+        "Choose the features you want and it draws new faces in about a second. Every picture carries an invisible "
+        "watermark, so it can always be identified as AI-made.</p>"
+        f"{stats}</div>{monitor}</div></section>"
+    )
+
+
+def how_html() -> str:
+    dots = "".join(f'<b style="left:{100 * i / (len(HOW) - 1):.3f}%"></b>' for i in range(len(HOW)))
+    cards = "".join(
+        f'<figure class="hd-step"><div class="hd-frame"><canvas aria-hidden="true"></canvas>'
+        f'<span class="hd-tag">{tag}</span></div>'
+        f"<figcaption><b><em>{i + 1}</em>{title}</b>{line}</figcaption></figure>"
+        for i, (title, line, tag) in enumerate(HOW)
+    )
+    return (
+        '<section class="hd-how"><div class="hd-how-head"><span class="hd-kicker">How it works</span>'
+        f"<h2>From static to a face in {TEACHER_STEPS} small steps</h2></div>"
+        f'<div class="hd-steps"><div class="hd-rail"><i></i>{dots}</div>{cards}</div>'
+        '<div class="hd-cue"><i></i>Try it yourself below<i></i></div></section>'
+    )
+
+
+def race_html(times: list[tuple[str, float]], gaps: list[tuple[str, float, int]], hw: str) -> str:
+    """Instant or best?: how long each run took (bars that replay the live timings at their real speed) and each
+    setting's measured realism gap."""
+    tmax = max(sec for _, sec in times)
+    lanes = "".join(
+        f'<div class="hd-lane time" data-sec="{sec:.4f}"><span>{html.escape(label)}</span>'
+        f'<div class="hd-track"><i style="transform:scaleX({sec / tmax:.4f})"></i></div><b>{sec:.2f} s</b></div>'
+        for label, sec in times
+    )
+    out = f'<div class="hd-race"><section><h4>How long each took</h4><p>Live, on {html.escape(hw)}. The bars replay each one at its real speed.</p>{lanes}</section>'
+    if gaps:
+        gmax, best = max(f for _, f, _ in gaps), min(f for _, f, _ in gaps)
+        small = any(n != 50_000 for _, _, n in gaps)
+        glanes = "".join(
+            f'<div class="hd-lane gapl" data-val="{f:.3f}" data-max="{gmax:.3f}"><span>{html.escape(label)}</span>'
+            f'<div class="hd-track gap{" best" if f == best else ""}"><i style="transform:scaleX({f / gmax:.4f})">'
+            f'</i></div><b data-suffix="{"*" if n != 50_000 else ""}">{f:.1f}{"*" if n != 50_000 else ""}</b></div>'
+            for label, f, n in gaps
+        )
+        note = " *Measured on 10,000 faces, which reads a bit higher." if small else ""
+        out += (
+            "<section><h4>Realism gap</h4><p>How far the pictures are from real photos, lower is better. Measured on "
+            f"50,000 faces each.{note}</p>{glanes}</section>"
+        )
+    return out + "</div>"
+
+
+# the project's story in measured FID-50k (clean): (eval file, plain name, technical name, used by the demo as)
+SCOREBOARD = (
+    ("legacy_dcgan_64px", "The first version", "DCGAN, 64 px (the original repo)", ""),
+    ("gan_1step", "One-step student, first try", "adversarial, collapsed (a timestep bug)", ""),
+    ("gan_anchor_1step", "One-step student + anchors", "adversarial + teacher ODE pairs", ""),
+    ("wflow_1step", "One-step student, W-Flow", "Wasserstein flow distillation", ""),
+    ("gan_fixed_1step", "One-step student, fixed", "adversarial, timestep bug fixed", "Instant"),
+    ("teacher", "Teacher, 50 steps", "DiT^DH-B, default guidance 1.78", ""),
+    ("teacher_tuned", "Teacher, 50 steps, tuned", "Internal Guidance 1.55", ""),
+    ("teacher_tuned_25step", "Teacher, 25 steps, tuned", "Internal Guidance 1.55", "Best quality"),
+)
+
+
+def scoreboard_html(evals: dict) -> str:
+    """Log-scale bars (lower is better): FID spans 3 to 207, so a linear scale would hide the teacher rows."""
+    import math
+
+    rows = [(evals[k]["fid_clean"], name, tech, use) for k, name, tech, use in SCOREBOARD if k in evals]
+    if not rows:
+        return ""
+    top = math.log10(max(f for f, *_ in rows) * 1.15)
+    best = min(f for f, *_ in rows)
+    out = "".join(
+        f'<div class="hd-srow{" best" if f == best else " live" if use else ""}" data-v="{f:.3f}" '
+        f'data-w="{math.log10(max(f, 1.0)) / top:.4f}"><span>{html.escape(name)}'
+        f"{f' · <em>{use}</em> mode' if use else ''}<small>{html.escape(tech)}</small></span>"
+        f'<div class="hd-track"><i style="transform:scaleX({math.log10(max(f, 1.0)) / top:.4f})"></i></div>'
+        f"<b>{f:.2f}</b></div>"
+        for f, name, tech, use in rows
+    )
+    return (
+        '<div class="hd-score"><h4>Realism gap of every model, measured</h4><p>FID (clean) against FFHQ-256 on '
+        "50,000 samples each, log scale, lower is better. Cyan to pink: what this page runs; green: the best.</p>"
+        f"{out}</div>"
+    )
+
+
+def wipe_html(without: Image.Image, with_: Image.Image, feature: str) -> str:
+    f = html.escape(feature.lower())
+    return (
+        f'<div class="hd-wipe"><img src="{jpeg_uri(without)}" alt="without {f}">'
+        f'<img class="hd-after" src="{jpeg_uri(with_)}" alt="with {f}"><span class="hd-bar"></span>'
+        f'<span class="hd-lbl l">Without</span><span class="hd-lbl r">With {f}</span></div>'
+        f'<div class="hd-wipe-cap">Same starting static; the AI was asked for one change: {f}.</div>'
+    )
 
 
 def new_seed() -> int:
@@ -273,7 +628,8 @@ def new_seed() -> int:
 
 
 def build_ui(e: Engine) -> gr.Blocks:
-    hw = torch.cuda.get_device_name() if e.dev.type == "cuda" else "CPU"
+    # named once for the engineers' tab; jobs name the GPU they actually ran on
+    hw = "Hugging Face ZeroGPU (a shared NVIDIA GPU, attached per job)" if ZERO_GPU else e.gpu_name()
     names = [n for n in e.attr_names]
     plain = [PLAIN.get(n, n.replace("_", " ")) for n in names]
     to_name = dict(zip(plain, names, strict=True))
@@ -311,46 +667,16 @@ def build_ui(e: Engine) -> gr.Blocks:
         if not weak:
             return ""
         what = ", ".join(PLAIN.get(n, n).lower() for n in weak)
-        return f"⚠️ Instant mode is bad at {what} (measured: it draws them in under half the faces). Try **{BEST}**."
+        return f"**Note:** Instant mode is bad at {what} (measured: it draws them in under half the faces). Try **{BEST}**."
 
-    reel = ASSETS / "showreel.mp4"
     with gr.Blocks(title="HumanDiT: faces of people who don't exist") as demo:
-        # ------------------------------------------------------------ header
-        with gr.Row(equal_height=False):
-            with gr.Column(scale=3, elem_id="intro"):
-                gr.Markdown(
-                    "# HumanDiT: faces of people who don't exist\n"
-                    "This AI invents realistic faces from scratch. **None of these people are real.** Choose the "
-                    "features you want and it draws new faces in about a second. Every picture carries an invisible "
-                    "watermark, so it can always be identified as AI-made."
-                )
-                gr.HTML(
-                    '<div id="how">'
-                    + "".join(
-                        f'<figure><img src="{data_uri(ASSETS / "how" / f)}" alt="{title}">'
-                        f"<figcaption><b>{title}</b>{line}</figcaption></figure>"
-                        for f, title, line in HOW
-                        if (ASSETS / "how" / f).exists()
-                    )
-                    + "</div>"
-                )
-            if reel.exists():
-                with gr.Column(scale=2, min_width=320):
-                    gr.Video(
-                        str(reel),
-                        autoplay=True,
-                        loop=True,
-                        show_label=False,
-                        interactive=False,
-                        elem_id="reel",
-                    )
-                    gr.Markdown(
-                        "<sub>The 15-second tour above is made entirely from this AI's own pictures.</sub>"
-                    )
+        # ------------------------------------------------------------ header: hero + how it works (app/web)
+        gr.HTML(hero_html(), elem_id="hd-hero-block", js_on_load=None)
+        gr.HTML(how_html(), elem_id="hd-how-block", js_on_load=None)
 
-        with gr.Tabs():
+        with gr.Tabs(elem_id="hd-tabs"):
             # -------------------------------------------------------- 1. make faces
-            with gr.Tab("🎨 Make faces"):
+            with gr.Tab("Make faces"):
                 gr.Markdown(
                     "Tick any features you want (or leave everything blank and let the AI decide), then press "
                     "**Make faces**. Each press invents new people. Under each face, a second AI (the *checker*) "
@@ -368,17 +694,18 @@ def build_ui(e: Engine) -> gr.Blocks:
                         count = gr.Slider(1, 8, value=4, step=1, label="How many faces?")
                         must = gr.CheckboxGroup(plain, label="Must have")
                         never = gr.CheckboxGroup(plain, label="Must NOT have")
-                        go = gr.Button("✨ Make faces", variant="primary", size="lg", elem_id="make-btn")
+                        go = gr.Button("Make faces", variant="primary", size="lg", elem_id="make-btn")
                     with gr.Column(scale=2):
                         gallery = gr.Gallery(
                             interactive=False,
+                            elem_classes=["hd-dev", "hd-load"],
                             label="Invented faces (not real people)",
                             columns=4,
                             height=560,
                             object_fit="cover",
                         )
-                        timing = gr.Markdown()
-                with gr.Accordion("⚙️ For engineers: sampler settings and the probe's scores", open=False):
+                        timing = gr.Markdown(elem_id="timing")
+                with gr.Accordion("For engineers: sampler settings and the probe's scores", open=False):
                     with gr.Row():
                         seed = gr.Number(value=42, precision=0, label="Seed (the noise the faces start from)")
                         keep = gr.Checkbox(False, label="Keep the same people (reuse this seed)")
@@ -392,6 +719,7 @@ def build_ui(e: Engine) -> gr.Blocks:
                         label="DINOv3 probe: P(attribute present) per face", interactive=False
                     )
 
+                @gpu(duration=30)
                 def generate(quality_, count_, must_, never_, seed_, keep_, steps_, cfg_, ig_):
                     seed_ = int(seed_) if keep_ else new_seed()
                     n, mode_, choices = int(count_), to_mode[quality_], choices_from(must_, never_)
@@ -416,8 +744,9 @@ def build_ui(e: Engine) -> gr.Blocks:
                         )
                         for i, im in enumerate(imgs)
                     ]
+                    where = f"GPU: {e.gpu_name()}" if e.dev.type == "cuda" else "on the CPU"
                     msg = (
-                        f"Made **{n} face{'s' * (n > 1)}** in **{t3 - t0:.1f} s** on this computer ({hw}).\n\n"
+                        f"Made **{n} face{'s' * (n > 1)}** in **{t3 - t0:.1f} s** ({where}).\n\n"
                         f"<sub>seed {seed_} · generator {1000 * (t1 - t0) / n:.0f} ms/face · decoder "
                         f"{1000 * (t2 - t1) / n:.0f} ms/face · watermark {1000 * (t3 - t2) / n:.0f} ms/face</sub>"
                     )
@@ -442,7 +771,7 @@ def build_ui(e: Engine) -> gr.Blocks:
                 demo.load(generate, *make_io, concurrency_id="gpu")  # the page opens with faces already made
 
             # -------------------------------------------------------- 2. change one thing
-            with gr.Tab("✏️ Change one thing") as t_edit:
+            with gr.Tab("Change one thing") as t_edit:
                 gr.Markdown(
                     "The **same invented person**, three ways: **without** a feature, **the AI's own choice**, and "
                     "**with** it. Pick a feature, or try another person.",
@@ -454,13 +783,23 @@ def build_ui(e: Engine) -> gr.Blocks:
                     )
                     e_quality = gr.Radio(qualities, value=qualities[-1], label="Speed or quality?")
                     e_go = gr.Button("Show me", variant="primary")
-                    e_new = gr.Button("🎲 Another person")
+                    e_new = gr.Button("Another person")
+                e_wipe = gr.HTML(js_on_load=None, elem_classes="hd-load")
                 with gr.Row():
-                    e_no = gr.Image(label="Without", interactive=False)
-                    e_any = gr.Image(label="The AI's choice", interactive=False)
-                    e_yes = gr.Image(label="With", interactive=False)
+                    e_no = gr.Image(
+                        label="Without", interactive=False, height=260, elem_classes=["hd-dev", "hd-load"]
+                    )
+                    e_any = gr.Image(
+                        label="The AI's choice",
+                        interactive=False,
+                        height=260,
+                        elem_classes=["hd-dev", "hd-load"],
+                    )
+                    e_yes = gr.Image(
+                        label="With", interactive=False, height=260, elem_classes=["hd-dev", "hd-load"]
+                    )
                 e_note = gr.Markdown()
-                with gr.Accordion("⚙️ For engineers", open=False):
+                with gr.Accordion("For engineers", open=False):
                     gr.Markdown(
                         "Same noise, one attribute token set to *no*, *null* (unspecified) and *yes*; everything "
                         "else unspecified. Identity is encouraged by the shared noise, not guaranteed."
@@ -469,6 +808,7 @@ def build_ui(e: Engine) -> gr.Blocks:
                         e_seed = gr.Number(value=4, precision=0, label="Seed")
                         e_cfg = gr.Slider(1.0, 6.0, value=3.0, step=0.1, label="Attribute CFG (teacher)")
 
+                @gpu(duration=30)
                 def edit(attr_, quality_, seed_, cfg_):
                     name, mode_ = to_name[attr_], to_mode[quality_]
                     j = names.index(name)
@@ -478,41 +818,54 @@ def build_ui(e: Engine) -> gr.Blocks:
                         [AttributeTokens.NO, AttributeTokens.NULL, AttributeTokens.YES], device=e.dev
                     )
                     z, _ = e.sample(noise, a, mode_, TEACHER_STEPS, cfg_, IG_TUNED)
-                    return *(
-                        e.save_png(im, f"{mode_}; seed {int(seed_)}; {name} {state}; cfg {cfg_}")
-                        for im, state in zip(e.decode(z), ("absent", "any", "present"), strict=True)
-                    ), weak_note(quality_, [name])
+                    imgs = e.decode(z)
+                    return (
+                        wipe_html(imgs[0], imgs[2], attr_),
+                        *(
+                            e.save_png(im, f"{mode_}; seed {int(seed_)}; {name} {state}; cfg {cfg_}")
+                            for im, state in zip(imgs, ("absent", "any", "present"), strict=True)
+                        ),
+                        weak_note(quality_, [name]),
+                    )
 
                 e_go.click(
                     edit,
                     [e_attr, e_quality, e_seed, e_cfg],
-                    [e_no, e_any, e_yes, e_note],
+                    [e_wipe, e_no, e_any, e_yes, e_note],
                     concurrency_id="gpu",
                 )
                 e_new.click(new_seed, None, e_seed).then(
                     edit,
                     [e_attr, e_quality, e_seed, e_cfg],
-                    [e_no, e_any, e_yes, e_note],
+                    [e_wipe, e_no, e_any, e_yes, e_note],
                     concurrency_id="gpu",
                 )
                 t_edit.select(
-                    lambda cur, *args: (gr.skip(),) * 4 if cur is not None else edit(*args),
+                    lambda cur, *args: (gr.skip(),) * 5 if cur is not None else edit(*args),
                     [e_no, e_attr, e_quality, e_seed, e_cfg],
-                    [e_no, e_any, e_yes, e_note],
+                    [e_wipe, e_no, e_any, e_yes, e_note],
                     concurrency_id="gpu",
                 )
 
             # -------------------------------------------------------- 3. blend two faces
-            with gr.Tab("🎞️ Blend two faces") as t_morph:
+            with gr.Tab("Blend two faces") as t_morph:
                 gr.Markdown(
                     "Watch one invented person **smoothly turn into another**, and back again.",
                     elem_classes="lead",
                 )
                 with gr.Row():
                     m_quality = gr.Radio(qualities, value=qualities[0], label="Speed or quality?")
-                    m_go = gr.Button("🎲 Blend two new people", variant="primary")
-                m_video = gr.Video(label="Blend", autoplay=True, loop=True, height=420, interactive=False)
-                with gr.Accordion("⚙️ For engineers", open=False):
+                    m_go = gr.Button("Blend two new people", variant="primary")
+                m_video = gr.Video(
+                    label="Blend",
+                    autoplay=True,
+                    loop=True,
+                    height=420,
+                    interactive=False,
+                    elem_id="blend-video",
+                    elem_classes="hd-load",
+                )
+                with gr.Accordion("For engineers", open=False):
                     gr.Markdown(
                         "Spherical interpolation (slerp) between the two seeds' Gaussian noise tensors."
                     )
@@ -521,6 +874,7 @@ def build_ui(e: Engine) -> gr.Blocks:
                         m_b = gr.Number(value=2, precision=0, label="Seed B")
                         m_frames = gr.Slider(8, 48, value=24, step=1, label="Frames")
 
+                @gpu(duration=60)
                 def morph(a_, b_, frames_, quality_):
                     import imageio.v3 as iio
 
@@ -552,13 +906,13 @@ def build_ui(e: Engine) -> gr.Blocks:
                 )
 
             # -------------------------------------------------------- 4. watch it draw
-            with gr.Tab("🔍 Watch it draw") as t_draw:
+            with gr.Tab("Watch it draw") as t_draw:
                 gr.Markdown(
                     "The AI starts from **pure static** and removes a little of it in each of "
                     f"**{TEACHER_STEPS} steps** until a face appears. These are its drafts along the way.",
                     elem_classes="lead",
                 )
-                d_go = gr.Button("🎲 Draw a new person", variant="primary")
+                d_go = gr.Button("Draw a new person", variant="primary")
                 with gr.Row():
                     d_video = gr.Video(
                         label="The whole drawing, step by step",
@@ -566,17 +920,24 @@ def build_ui(e: Engine) -> gr.Blocks:
                         loop=True,
                         height=460,
                         interactive=False,
+                        elem_id="draw-video",
+                        elem_classes="hd-load",
                     )
                     d_gallery = gr.Gallery(
-                        label="Six of the drafts", columns=3, height=460, interactive=False
+                        label="Six of the drafts",
+                        columns=3,
+                        height=460,
+                        interactive=False,
+                        elem_classes=["hd-dev", "hd-load"],
                     )
-                with gr.Accordion("⚙️ For engineers", open=False):
+                with gr.Accordion("For engineers", open=False):
                     gr.Markdown(
                         f"The teacher's flow-matching ODE ({TEACHER_STEPS} steps, Internal Guidance {IG_TUNED}). Each "
                         "frame is the clean-latent prediction x̂₀ at that step, decoded by the RAEv2 decoder."
                     )
                     d_seed = gr.Number(value=3, precision=0, label="Seed")
 
+                @gpu(duration=30)
                 def draw(seed_):
                     import imageio.v3 as iio
 
@@ -615,7 +976,7 @@ def build_ui(e: Engine) -> gr.Blocks:
                 )
 
             # -------------------------------------------------------- 5. instant or best?
-            with gr.Tab("⚡ Instant or best?") as t_cmp:
+            with gr.Tab("Instant or best?") as t_cmp:
                 gr.Markdown(
                     "The same starting static, drawn four ways. **Instant** takes one step; **best quality** takes "
                     "more clean-up steps: slower, but closer to a real photo. The *realism gap* is measured on "
@@ -629,12 +990,16 @@ def build_ui(e: Engine) -> gr.Blocks:
                         label="Ask for a feature",
                     )
                     c_go = gr.Button("Compare", variant="primary")
-                    c_new = gr.Button("🎲 Another person")
+                    c_new = gr.Button("Another person")
                 c_gallery = gr.Gallery(
-                    columns=4, height=340, label="Same start, four ways", interactive=False
+                    columns=4,
+                    height=340,
+                    label="Same start, four ways",
+                    interactive=False,
+                    elem_classes=["hd-dev", "hd-load"],
                 )
-                c_gaps = gr.Markdown()
-                with gr.Accordion("⚙️ For engineers", open=False):
+                c_gaps = gr.HTML(js_on_load=None)
+                with gr.Accordion("For engineers", open=False):
                     gr.Markdown(
                         "Times are live on this machine (sampling only). *Realism gap* is FID (clean) vs FFHQ-256, "
                         "at IG 1.55: FID-50k where it was measured (student, teacher at 25 and 50 steps), FID-10k "
@@ -642,6 +1007,7 @@ def build_ui(e: Engine) -> gr.Blocks:
                     )
                     c_seed = gr.Number(value=11, precision=0, label="Seed")
 
+                @gpu(duration=30)
                 def compare(seed_, attr_):
                     noise, a = e.noise(seed_), e.attrs([])
                     if attr_ in to_name:
@@ -652,7 +1018,7 @@ def build_ui(e: Engine) -> gr.Blocks:
                             (e.teacher_mode, s, next((st for st in stems if st in e.evals), None))
                             for s, stems in TEACHER_EVALS
                         ]
-                    out, gaps = [], []
+                    out, times, gaps = [], [], []
                     for mode_, s, stem in runs:
                         e.sync()
                         t0 = time.perf_counter()
@@ -660,6 +1026,8 @@ def build_ui(e: Engine) -> gr.Blocks:
                         e.sync()
                         sec = time.perf_counter() - t0
                         name = "Instant" if mode_ == e.fast_mode else f"Best quality · {s} steps"
+                        short = name.replace("Best quality · ", "")
+                        times.append((short, sec))
                         out.append(
                             (
                                 e.save_png(e.decode(z)[0], f"{mode_}; {s} steps; seed {int(seed_)}; {attr_}"),
@@ -667,22 +1035,8 @@ def build_ui(e: Engine) -> gr.Blocks:
                             )
                         )
                         if stem in e.evals:
-                            r, short = e.evals[stem], name.replace("Best quality · ", "")
-                            gaps.append(
-                                f"{short} **{r['fid_clean']:.1f}**"
-                                + (
-                                    ""
-                                    if r["n"] == 50_000
-                                    else f" (from {r['n']:,} faces, which reads a bit higher)"
-                                )
-                            )
-                    note = (
-                        "**Realism gap** (lower is better; each measured on 50,000 faces unless noted): "
-                        + " · ".join(gaps)
-                        if gaps
-                        else ""
-                    )
-                    return out, note
+                            gaps.append((short, e.evals[stem]["fid_clean"], e.evals[stem]["n"]))
+                    return out, race_html(times, gaps, e.gpu_name())
 
                 c_go.click(compare, [c_seed, c_attr], [c_gallery, c_gaps], concurrency_id="gpu")
                 c_new.click(new_seed, None, c_seed).then(
@@ -696,14 +1050,14 @@ def build_ui(e: Engine) -> gr.Blocks:
                 )
 
             # -------------------------------------------------------- 6. is it AI-made?
-            with gr.Tab("🛡️ Is it AI-made?"):
+            with gr.Tab("Is it AI-made?"):
                 gr.Markdown(
                     "Every face this site makes carries a **hidden watermark** you can't see. Drop any picture here to "
                     "check for it: it survives resizing and JPEG compression. Or try one of the two examples below.",
                     elem_classes="lead",
                 )
                 with gr.Row():
-                    w_in = gr.Image(type="pil", label="Your picture", height=360)
+                    w_in = gr.Image(type="pil", label="Your picture", height=360, elem_id="wm-in")
                     w_out = gr.Markdown(elem_id="verdict")
                 examples = [
                     [str(p)]
@@ -719,22 +1073,27 @@ def build_ui(e: Engine) -> gr.Blocks:
                         inputs=w_in,
                         label="Examples: a HumanDiT face, and a face from this project's first version (no watermark)",
                     )
-                w_in.change(
-                    lambda im: (
-                        ""
-                        if im is None
-                        else "✅ **Yes: this picture carries the HumanDiT watermark.** It was made by this AI."
-                        if check_watermark(im, e.wm_device)
-                        else "❌ **No HumanDiT watermark found.** This picture was not made here (or it was heavily "
+
+                @gpu(duration=15)
+                def verdict(im):
+                    if im is None:
+                        return ""
+                    if check_watermark(im, e.wm_device):
+                        return "**Yes: this picture carries the HumanDiT watermark.** It was made by this AI."
+                    return (
+                        "**No HumanDiT watermark found.** This picture was not made here (or it was heavily "
                         "altered)."
-                    ),
+                    )
+
+                w_in.change(
+                    verdict,
                     w_in,
                     w_out,
                     concurrency_id="gpu",
                 )
 
             # -------------------------------------------------------- 7. for engineers
-            with gr.Tab("📊 For engineers"):
+            with gr.Tab("For engineers"):
                 gr.Markdown(
                     "**Teacher:** a DiT^DH-B flow-matching transformer (183M parameters) in the RAEv2 latent space "
                     "(frozen DINOv3-L features + a ViT-XL pixel decoder), trained with CMuon; sampled with a "
@@ -745,6 +1104,7 @@ def build_ui(e: Engine) -> gr.Blocks:
                     + (" with ONNX Runtime." if e.ort_dec is not None else ".")
                     + " Methods, every measurement and what broke: README.md, MODEL_CARD.md and docs/."
                 )
+                gr.HTML(scoreboard_html(e.evals), js_on_load=None)
                 weak = ", ".join(n.replace("_", " ") for n in e.student_weak)
                 if weak:
                     gr.Markdown(
@@ -802,7 +1162,7 @@ def build_ui(e: Engine) -> gr.Blocks:
     return demo
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--teacher", default="runs/teacher_b/ckpt/ema.safetensors")
     ap.add_argument("--student", default="runs/student_gan_fixed/student.safetensors")
@@ -810,20 +1170,25 @@ def main() -> None:
     ap.add_argument("--eval-dirs", nargs="+", default=["runs/eval", "runs/eval_extra", "runs/eval_local"])
     ap.add_argument("--onnx-dir", default="onnx", help="ONNX graphs used when no CUDA GPU is available")
     ap.add_argument("--watermark-device", default="auto", choices=["auto", "cpu", "cuda"])
-    ap.add_argument("--port", type=int, default=7860)
+    ap.add_argument("--port", type=int, default=int(os.environ.get("GRADIO_SERVER_PORT", 7860)))
     ap.add_argument("--share", action="store_true")
-    args = ap.parse_args()
+    ap.add_argument(
+        "--no-warm-up", action="store_true", help="skip the start-up warm-up (ZeroGPU has no GPU then)"
+    )
+    args = ap.parse_args(argv)
     engine = Engine(
         args.teacher, args.student, args.probe, args.eval_dirs, args.onnx_dir, args.watermark_device
     )
-    engine.warm_up()
+    if not (args.no_warm_up or ZERO_GPU):
+        engine.warm_up()
     build_ui(engine).launch(
         server_port=args.port,
         share=args.share,
         theme=THEME,
         css=CSS,
-        head=REEL_MUTED,
+        head=head_html(),
         allowed_paths=[str(ASSETS)],
+        footer_links=[],  # no "Use via API / Built with Gradio / Settings" footer
     )
 
 

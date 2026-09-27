@@ -19,11 +19,14 @@ HF_REPO = "nyu-visionx/RAEv2-models"
 LATENT_SHAPE = (1024, 16, 16)
 
 
-def ensure_weights(root: Path = DEFAULT_ROOT) -> Path:
-    """Download the released encoder/decoder/stats if they are not present."""
+def ensure_weights(root: Path = DEFAULT_ROOT, encoder: bool = True) -> Path:
+    """Download the released encoder/decoder/stats if they are not present (sampling needs no encoder)."""
     from huggingface_hub import hf_hub_download
 
-    for rel in (ENCODER_WEIGHTS, f"{DECODER_DIR}/decoder.pt", f"{DECODER_DIR}/stats.pt"):
+    for rel in ((ENCODER_WEIGHTS,) if encoder else ()) + (
+        f"{DECODER_DIR}/decoder.pt",
+        f"{DECODER_DIR}/stats.pt",
+    ):
         if not (root / rel).exists():
             hf_hub_download(HF_REPO, rel, local_dir=str(root))
     return root

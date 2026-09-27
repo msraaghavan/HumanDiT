@@ -12,8 +12,8 @@
 -->
 <style>
   :root {
-    --ink: #07080a; --paper: #f1eee7; --dim: rgba(241, 238, 231, .5); --faint: rgba(241, 238, 231, .16);
-    --accent: #ff4f2e; --cyan: #7fe3ff;
+    --ink: #05060b; --paper: #e9f6ff; --dim: rgba(233, 246, 255, .52); --faint: rgba(233, 246, 255, .16);
+    --accent: #00e5ff; --accent2: #ff3df0;
     --sans: Bahnschrift, "DIN Alternate", "Barlow Condensed", "Arial Narrow", sans-serif;
     --mono: "Cascadia Mono", Consolas, "SF Mono", Menlo, monospace;
   }
@@ -30,14 +30,18 @@
   .head .w { display: inline-block; overflow: hidden; vertical-align: top; padding: 0 .03em .1em 0; margin-right: .22em;
              position: relative; z-index: 1; }
   .head .w > span { display: inline-block; }
-  .head .hl { position: absolute; height: .13em; background: var(--accent); transform-origin: 0 50%; z-index: 0; }
+  .head .hl { position: absolute; height: .13em; background: var(--accent); transform-origin: 0 50%; z-index: 0;
+              box-shadow: 0 0 18px var(--accent), 0 0 42px rgba(0, 229, 255, .45); }
+  [style*="var(--accent)"] { text-shadow: 0 0 18px rgba(0, 229, 255, .65), 0 0 44px rgba(0, 229, 255, .3); }
+  [style*="var(--accent2)"] { text-shadow: 0 0 16px rgba(255, 61, 240, .6); }
   .chip { position: absolute; width: 262px; height: 66px; border: 1.5px solid var(--faint); border-radius: 12px;
           box-sizing: border-box; overflow: hidden; }
-  .chip .fill { position: absolute; inset: 0; background: var(--accent); transform-origin: 0 50%; }
+  .chip .fill { position: absolute; inset: 0; background: linear-gradient(90deg, var(--accent), #7c9dff);
+                transform-origin: 0 50%; box-shadow: 0 0 26px rgba(0, 229, 255, .55); }
   .chip .name { position: absolute; left: 20px; top: 16px; font-size: 29px; font-variation-settings: "wdth" 85, "wght" 500; }
   .chip .p { position: absolute; right: 16px; top: 19px; font-size: 25px; font-variation-settings: "wdth" 80, "wght" 600; }
-  .glass { position: absolute; background: rgba(7, 8, 10, .7); backdrop-filter: blur(22px) saturate(1.2);
-           border: 1px solid rgba(241, 238, 231, .14); border-radius: 22px; }
+  .glass { position: absolute; background: rgba(5, 6, 11, .7); backdrop-filter: blur(22px) saturate(1.2);
+           border: 1px solid rgba(233, 246, 255, .14); border-radius: 22px; }
   .bar { position: absolute; height: 20px; border-radius: 10px; }
   #vignette { position: absolute; inset: 0; pointer-events: none;
               background: radial-gradient(ellipse at 50% 48%, rgba(0,0,0,0) 55%, rgba(0,0,0,.55) 100%); }
@@ -48,8 +52,8 @@
 <div id="stage">
   <canvas id="cv" width="1920" height="1080"></canvas>
   <div id="dom"></div>
-  <div class="scrim" style="top:0;background:linear-gradient(rgba(7,8,10,.75),rgba(7,8,10,0))"></div>
-  <div class="scrim" style="bottom:0;background:linear-gradient(rgba(7,8,10,0),rgba(7,8,10,.8))"></div>
+  <div class="scrim" style="top:0;background:linear-gradient(rgba(5,6,11,.75),rgba(5,6,11,0))"></div>
+  <div class="scrim" style="bottom:0;background:linear-gradient(rgba(5,6,11,0),rgba(5,6,11,.8))"></div>
   <div id="vignette"></div>
   <div id="fx"></div>
   <div id="hud"></div>
@@ -200,11 +204,11 @@ function face(im, x, y, size, alpha = 1, pixelated = false) {
   ctx.drawImage(im, x, y, size, size);
   ctx.restore();
 }
-function frameLine(x, y, w, h, a, color = "rgba(241,238,231,.22)") {   // hairline frame with corner ticks
+function frameLine(x, y, w, h, a, color = "rgba(233,246,255,.22)") {   // hairline frame with corner ticks
   if (a <= 0) return;
   ctx.save(); ctx.globalAlpha = a; ctx.strokeStyle = color; ctx.lineWidth = 1.5;
   ctx.strokeRect(x - 12, y - 12, w + 24, h + 24);
-  ctx.strokeStyle = "rgba(241,238,231,.9)"; ctx.lineWidth = 2.5; const L = 22;
+  ctx.strokeStyle = "rgba(233,246,255,.9)"; ctx.lineWidth = 2.5; const L = 22;
   for (const [cx, cy, dx, dy] of [[x - 12, y - 12, 1, 1], [x + w + 12, y - 12, -1, 1], [x - 12, y + h + 12, 1, -1], [x + w + 12, y + h + 12, -1, -1]]) {
     ctx.beginPath(); ctx.moveTo(cx, cy + dy * L); ctx.lineTo(cx, cy); ctx.lineTo(cx + dx * L, cy); ctx.stroke();
   }
@@ -213,12 +217,12 @@ function frameLine(x, y, w, h, a, color = "rgba(241,238,231,.22)") {   // hairli
 function ring(cx, cy, r, u, a) {                        // progress ring (the ODE steps)
   if (a <= 0) return;
   ctx.save(); ctx.globalAlpha = a; ctx.lineCap = "round";
-  ctx.strokeStyle = "rgba(241,238,231,.12)"; ctx.lineWidth = 10;
+  ctx.strokeStyle = "rgba(233,246,255,.12)"; ctx.lineWidth = 10;
   ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
-  ctx.strokeStyle = "#ff4f2e"; ctx.lineWidth = 10;
+  ctx.strokeStyle = "#00e5ff"; ctx.lineWidth = 10;
   ctx.beginPath(); ctx.arc(cx, cy, r, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * u); ctx.stroke();
   const ang = -Math.PI / 2 + Math.PI * 2 * u;               // the leading dot
-  ctx.fillStyle = "#f1eee7"; ctx.beginPath(); ctx.arc(cx + r * Math.cos(ang), cy + r * Math.sin(ang), 9, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = "#e9f6ff"; ctx.beginPath(); ctx.arc(cx + r * Math.cos(ang), cy + r * Math.sin(ang), 9, 0, Math.PI * 2); ctx.fill();
   ctx.restore();
 }
 
@@ -254,14 +258,14 @@ function build() {
   X.t1.spans.slice(5).forEach(s => (s.style.color = "var(--accent)"));
   X.h1 = headline(dom, "An AI that invents faces of people who don't exist.", { ...big(62, 90, 500), width: "900px" }, [8, 9]);
   X.g1 = headline(dom, "It starts from pure random static.", { ...big(36, 90, 500), width: "640px" }, [4, 5]);
-  X.tech1 = el(dom, "abs mono", "", { fontSize: "18px", color: "var(--cyan)" });
+  X.tech1 = el(dom, "abs mono", "", { fontSize: "18px", color: "var(--accent2)" });
 
   // scene 2: draw
   X.h2 = headline(dom, "It cleans up the static, one step at a time.", { ...big(72), width: "900px" }, [5, 6, 7, 8, 9]);
   X.stepLbl = el(dom, "abs", "STEP", { fontSize: "30px", letterSpacing: ".3em", color: "var(--dim)", fontVariationSettings: '"wdth" 90, "wght" 500' });
   X.odo = odometer(dom, 2, { fontSize: "150px", lineHeight: "1", fontVariationSettings: '"wdth" 75, "wght" 600', fontFeatureSettings: '"tnum"' });
   X.of25 = el(dom, "abs", "of 25", { fontSize: "34px", color: "var(--dim)", fontVariationSettings: '"wdth" 85, "wght" 500' });
-  X.sk = el(dom, "abs", "its rough inner sketch", { fontSize: "26px", color: "var(--cyan)", fontVariationSettings: '"wdth" 85, "wght" 500' });
+  X.sk = el(dom, "abs", "its rough inner sketch", { fontSize: "26px", color: "var(--accent2)", fontVariationSettings: '"wdth" 85, "wght" 500' });
   X.tech2 = el(dom, "abs mono", "", { fontSize: "18px", color: "var(--dim)" });
 
   // scene 3: choose
@@ -327,7 +331,7 @@ function renderAt(tIn) {
   const t = wrap(tIn);
   ctx.clearRect(0, 0, W, H);
   const drift = (t / T) * 48;                               // one dot pitch per loop: seamless
-  ctx.fillStyle = "rgba(241,238,231,.07)";
+  ctx.fillStyle = "rgba(233,246,255,.07)";
   for (let y = -48; y < H + 48; y += 48) for (let x = -48; x < W + 48; x += 48) ctx.fillRect(x + drift, y + drift * .5, 2, 2);
   let sh = 0;                                               // camera shake: a short decaying kick at each cut
   for (const [s0] of SCENES.slice(1)) if (t >= s0) sh = Math.max(sh, Math.exp(-(t - s0) * 16));
@@ -401,8 +405,8 @@ function renderAt(tIn) {
     face(prev, tx, ty, ts, 1);
     if (w < 1) {                                            // scan-line wipe from top to bottom
       ctx.save(); ctx.beginPath(); ctx.rect(tx, ty, ts, ts * w); ctx.clip(); face(now, tx, ty, ts, 1); ctx.restore();
-      ctx.fillStyle = "rgba(255,79,46,.9)"; ctx.fillRect(tx - 8, ty + ts * w - 2, ts + 16, 4);
-      ctx.fillStyle = "rgba(255,79,46,.18)"; ctx.fillRect(tx, ty + ts * w - 40, ts, 40);
+      ctx.fillStyle = "rgba(0,229,255,.9)"; ctx.fillRect(tx - 8, ty + ts * w - 2, ts + 16, 4);
+      ctx.fillStyle = "rgba(0,229,255,.18)"; ctx.fillRect(tx, ty + ts * w - 40, ts, 40);
     } else face(now, tx, ty, ts, 1);
     face(GRID[4], tx, ty, ts, tw(t, 7.85, 8.05, E.inOutCubic));
     frameLine(tx, ty, ts, ts, 1 - shrink);
@@ -417,10 +421,10 @@ function renderAt(tIn) {
     const onU = ei >= 0 ? tw(t, EDIT_T[ei], EDIT_T[ei] + .22, E.outExpo) : 0;
     c.fill.style.transform = `scaleX(${onU})`;
     c.style.borderColor = onU > .5 ? "var(--accent)" : "var(--faint)";
-    c.nm.style.color = onU > .5 ? "#0b0b0d" : "var(--paper)";
+    c.nm.style.color = onU > .5 ? "#04050a" : "var(--paper)";
     const pv = ei >= 0 ? M.probeAt(t, name) : null;
     c.p.textContent = pv == null ? (onU > .5 ? "…" : "") : `✓ ${Math.round(pv * 100)}%`;
-    c.p.style.color = "#0b0b0d";
+    c.p.style.color = "#04050a";
     place(c, 900 + col * 284 - o * 80, 392 + row * 84 + (1 - a) * 40, live(t, 5, 7.9) ? a * (1 - o) : 0);
   });
   showHead(X.chk, t, 5.9, 7.42, 900, 740, .02);
@@ -439,10 +443,10 @@ function renderAt(tIn) {
       const x = c * TILE + (TILE - s) / 2, y = GY + r * TILE + (TILE - s) / 2;
       face(GRID[idx], x, y, s, 1);
       const flash = 1 - tw(t, 8.0 + d * .042, 8.35 + d * .042, E.outCubic);
-      if (flash > 0 && idx !== 4) { ctx.fillStyle = `rgba(241,238,231,${.55 * flash})`; ctx.fillRect(x, y, s, s); }
+      if (flash > 0 && idx !== 4) { ctx.fillStyle = `rgba(233,246,255,${.55 * flash})`; ctx.fillRect(x, y, s, s); }
     }
     const dk = tw(t, 8.55, 8.95, E.outCubic);
-    ctx.fillStyle = `rgba(7,8,10,${.5 * dk})`; ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = `rgba(5,6,11,${.5 * dk})`; ctx.fillRect(0, 0, W, H);
   }
   const g4 = tw(t, 8.55, 9.0);
   place(X.glass, 370, 270 + (1 - g4) * 60, live(t, 8.5, SHUT + .3) ? g4 : 0);
@@ -487,15 +491,15 @@ function renderAt(tIn) {
     if (mm > 0) {
       ctx.save(); ctx.globalAlpha = mm;
       const grd = ctx.createLinearGradient(METER.x, 0, METER.x + METER.w, 0);
-      grd.addColorStop(0, "#ff4f2e"); grd.addColorStop(1, "rgba(241,238,231,.25)");
+      grd.addColorStop(0, "#00e5ff"); grd.addColorStop(1, "rgba(233,246,255,.25)");
       ctx.fillStyle = grd; ctx.fillRect(METER.x, METER.y - 3, METER.w * tw(t, 10.7, 11.3, E.inOutCubic), 6);
-      ctx.fillStyle = "rgba(241,238,231,.4)";
+      ctx.fillStyle = "rgba(233,246,255,.4)";
       for (const v of [1, 3, 10, 30, 100, 300]) ctx.fillRect(meterX(v) - 1, METER.y - 12, 2, 24);
       const fvm = lerp(M.metrics.fid_before, M.metrics.fid_after, tw(t, 11.0, 12.1, E.outExpo));
       const bx = meterX(M.metrics.fid_before);
-      ctx.fillStyle = "rgba(241,238,231,.35)"; ctx.beginPath(); ctx.arc(bx, METER.y, 9, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "rgba(233,246,255,.35)"; ctx.beginPath(); ctx.arc(bx, METER.y, 9, 0, Math.PI * 2); ctx.fill();
       const mx = meterX(fvm);
-      ctx.fillStyle = "#ff4f2e"; ctx.beginPath(); ctx.moveTo(mx, METER.y - 16); ctx.lineTo(mx - 14, METER.y - 40); ctx.lineTo(mx + 14, METER.y - 40); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = "#00e5ff"; ctx.beginPath(); ctx.moveTo(mx, METER.y - 16); ctx.lineTo(mx - 14, METER.y - 40); ctx.lineTo(mx + 14, METER.y - 40); ctx.closePath(); ctx.fill();
       ctx.fillRect(mx - 1.5, METER.y - 16, 3, 32);
       ctx.restore();
       X.mB.textContent = `before: ${M.metrics.fid_before.toFixed(1)}`;
@@ -504,7 +508,7 @@ function renderAt(tIn) {
     // arrow between before and after
     const ar = tw(t, 10.95, 11.35, E.inOutCubic) * (1 - out5);
     if (ar > 0) {
-      ctx.strokeStyle = "rgba(255,79,46,.95)"; ctx.lineWidth = 3;
+      ctx.strokeStyle = "rgba(0,229,255,.95)"; ctx.lineWidth = 3;
       const x0 = BF.x + BF.s + 22, x1 = x0 + (AF.x - BF.x - BF.s - 44) * ar;
       ctx.beginPath(); ctx.moveTo(x0, BF.y + BF.s / 2); ctx.lineTo(x1, BF.y + BF.s / 2); ctx.stroke();
       ctx.beginPath(); ctx.moveTo(x1 - 12, BF.y + BF.s / 2 - 10); ctx.lineTo(x1, BF.y + BF.s / 2); ctx.lineTo(x1 - 12, BF.y + BF.s / 2 + 10); ctx.stroke();

@@ -14,7 +14,6 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from sklearn.metrics import balanced_accuracy_score, roc_auc_score
 
 # Excluded: subjective/appearance-judgement labels, image-quality labels, and skin tone.
 EXCLUDED = {
@@ -86,6 +85,8 @@ def fit_linear_probe(
     min_steps: int = 3000,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """Multi-label logistic regression with per-attribute class balancing; weight decay picked on val."""
+    from sklearn.metrics import balanced_accuracy_score  # not needed by the demo
+
     xt = torch.from_numpy(x).float().to(device)
     mu, sigma = xt.mean(0), xt.std(0).clamp_min(1e-6)
     xt = (xt - mu) / sigma
@@ -148,6 +149,11 @@ def calibrate_abstention(
 
 
 def evaluate(probe: Probe, x: np.ndarray, y: np.ndarray) -> dict[str, dict[str, float]]:
+    from sklearn.metrics import (
+        balanced_accuracy_score,
+        roc_auc_score,
+    )  # training/evaluation only: the demo never needs it
+
     p = torch.sigmoid(probe.logits(torch.from_numpy(x))).numpy()
     out = {}
     for j, name in enumerate(probe.names):

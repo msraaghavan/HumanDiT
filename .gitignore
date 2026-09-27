@@ -2,6 +2,7 @@
 __pycache__/
 *.py[cod]
 .venv/
+.venv-space/
 *.egg-info/
 .pytest_cache/
 .ruff_cache/
@@ -12,6 +13,7 @@ __pycache__/
 /runs/
 /outputs/
 /checkpoints/
+/dist/
 /pretrained/
 /wandb/
 /Generated_Images/
