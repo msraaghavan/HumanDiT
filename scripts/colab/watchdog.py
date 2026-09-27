@@ -6,6 +6,10 @@ and its driver's job status. Guards (results are always pulled before a VM is st
   * budget once BUDGET_CU compute units have been spent since the watchdog started, every session is stopped and
            the watchdog exits (more spend needs the user's OK)
   * age    any session older than MAX_AGE_H hours is stopped
+Keep-alive: a VM running a detached driver (scripts/colab/launch.py) has an idle kernel and no attached client,
+and Colab reclaimed one such VM ~20 min after the CLI's login lapsed. So every check runs a trivial `colab exec`
+on idle kernels, and a session whose driver is still running is never counted as idle. A check where the CLI
+itself fails (login lapsed, network) is skipped rather than read as 'no sessions'.
 Log: runs/colab/watchdog.log (and stdout); pulled results: runs/colab/pulled/<session>/. Exits when no sessions have been left for two checks.
 """
 
@@ -41,9 +45,9 @@ def log(msg: str) -> None:
         f.write(line + "\n")
 
 
-def colab(*args: str, timeout: int = 180) -> tuple[int, str]:
+def colab(*args: str, timeout: int = 180, stdin: str | None = None) -> tuple[int, str]:
     try:
-        r = subprocess.run([COLAB, *args], capture_output=True, text=True, timeout=timeout)
+        r = subprocess.run([COLAB, *args], capture_output=True, text=True, timeout=timeout, input=stdin)
         out = r.stdout + r.stderr
         return r.returncode, re.sub(r"token=[^ &\s]+", "token=REDACTED", out)
     except subprocess.TimeoutExpired:
@@ -91,6 +95,10 @@ def driver_status(name: str) -> dict:
         except json.JSONDecodeError:
             return {}
     return {}
+
+
+def driver_running(st: dict) -> bool:
+    return bool(st) and "driver" not in st and any(v == "running" for v in st.values())
 
 
 def summarize(st: dict) -> str:
@@ -180,7 +188,11 @@ def main() -> None:
     while True:
         now = time.time()
         bal, rate = usage()
-        spent = (state["start_balance"] - bal) if bal is not None and state["start_balance"] else 0.0
+        if bal is None:  # the CLI itself failed: not evidence that the VMs are gone
+            log("Colab CLI unavailable (login lapsed or network) -- skipping this check")
+            time.sleep(INTERVAL)
+            continue
+        spent = (state["start_balance"] - bal) if state["start_balance"] else 0.0
         names = sessions()
         log(
             f"balance {bal} CU | spent {spent:.2f} / {BUDGET_CU} | rate {rate}/h | sessions {names or 'none'}"
@@ -197,7 +209,10 @@ def main() -> None:
             drv = driver_status(n)
             hold = HOLD / n
             held = hold.exists() and now - hold.stat().st_mtime < HOLD_MIN * 60
-            if st == "IDLE" and not held:
+            busy = driver_running(drv)  # a detached driver leaves the kernel idle
+            if st == "IDLE" and busy:
+                colab("exec", "-s", n, timeout=90, stdin="print('keepalive')")  # keep the VM in use
+            if st == "IDLE" and not held and not busy:
                 state["idle_since"].setdefault(n, now)
             else:
                 state["idle_since"].pop(n, None)
