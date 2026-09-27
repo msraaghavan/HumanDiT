@@ -227,6 +227,23 @@ def build(runs: Path) -> str:
                     )
                 note += " So the absolute percentages are approximate; the shift from the base-rate column is the controllable effect."
                 lines += [note, ""]
+        # one-step students: the same control test, re-run on the demo laptop (runs/eval_local)
+        sc = [
+            (label, _load(runs / "eval_local" / f"{key}_1step_control.json"))
+            for key, label in (("gan_fixed", "fixed GAN"), ("wflow", "W-Flow"))
+        ]
+        sc = [(label, r) for label, r in sc if r and r.get("controllability")]
+        if sc:
+            gpu = sc[0][1].get("gpu", "GPU").replace("NVIDIA ", "")
+            w4090 = ((ev.get("wflow_1step") or {}).get("controllability") or {}).get("mean_accuracy")
+            lines += [
+                f"One-step students (one network evaluation, so no CFG), same test on the demo laptop ({gpu}, "
+                "fp32): "
+                + ", ".join(f"{label} **{r['controllability']['mean_accuracy']:.1%}**" for label, r in sc)
+                + " mean agreement."
+                + (f" W-Flow scored {w4090:.1%} on the 4090 in bf16." if w4090 is not None else ""),
+                "",
+            ]
         if t.get("memorization"):
             m = t["memorization"]
             lines += [
@@ -267,12 +284,15 @@ def build(runs: Path) -> str:
     ox = _load(runs / "eval" / "onnx_export.json")
     if ox:
         g, d, tq = ox["generator_1step"], ox["decoder"], ox.get("torch_cpu_ms_per_face", {})
+        gen_name = {"student_gan_fixed": "fixed GAN", "student_wflow": "W-Flow"}.get(
+            Path(ox.get("student", "")).parent.name, "student"
+        )
         lines += [
             "### CPU-only deployment (ONNX Runtime, laptop CPU, batch 1)",
             "",
             "| Graph | max abs error vs PyTorch | ONNX Runtime ms/face | eager PyTorch ms/face | size |",
             "|---|---|---|---|---|",
-            f"| 1-step generator | {g['max_abs_diff']:.1e} | {g['cpu_ms_per_face']:.0f} | {tq.get('generator_1step', 0):.0f} | {g['mb']:.0f} MB |",
+            f"| 1-step generator ({gen_name}) | {g['max_abs_diff']:.1e} | {g['cpu_ms_per_face']:.0f} | {tq.get('generator_1step', 0):.0f} | {g['mb']:.0f} MB |",
             f"| RAEv2 decoder | {d['max_abs_diff']:.1e} | {d['cpu_ms_per_face']:.0f} | {tq.get('decoder', 0):.0f} | {d['mb']:.0f} MB |",
         ]
         q = ox.get("decoder_int8")
@@ -289,13 +309,20 @@ def build(runs: Path) -> str:
     wm = _load(runs / "eval" / "watermark.json")
     if wm:
         r = wm["recovery"]
+
+        def pct(v: float) -> str:
+            return f"{v:.0%}" if v in (0.0, 1.0) else f"{v:.1%}"
+
         lines += [
-            f"### Invisible watermark on every demo output ({wm['method']}, {wm['n_marked']} generated faces)",
+            f"### Invisible watermark on every demo image ({wm['method']}, {wm['n_marked']} generated faces"
+            + (", teacher and one-step GAN" if len(wm.get("grids", [])) > 1 else "")
+            + ({"cuda": ", embedded on the GPU", "cpu": ", embedded on the CPU"}.get(wm.get("device"), ""))
+            + ")",
             "",
             "| PNG | JPEG q75 | JPEG q50 | 2× down/up-scale | 90% centre crop | PSNR | false positives (real / unmarked) |",
             "|---|---|---|---|---|---|---|",
-            f"| {r['png']:.0%} | {r['jpeg_q75']:.0%} | {r['jpeg_q50']:.1%} | {r['downscale_2x_upscale']:.0%} | "
-            f"{r['center_crop_90pct']:.0%} | {wm['psnr_db_mean']:.1f} dB | "
+            f"| {pct(r['png'])} | {pct(r['jpeg_q75'])} | {pct(r['jpeg_q50'])} | {pct(r['downscale_2x_upscale'])} | "
+            f"{pct(r['center_crop_90pct'])} | {wm['psnr_db_mean']:.1f} dB | "
             f"{wm['false_positive_rate_real_ffhq']:.0%} / {wm['false_positive_rate_unmarked_generated']:.0%} |",
             "",
         ]

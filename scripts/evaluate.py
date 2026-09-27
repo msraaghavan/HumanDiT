@@ -77,6 +77,7 @@ def main() -> None:
     ap.add_argument("--out", default="runs/eval")
     ap.add_argument("--keep-images", action="store_true")
     ap.add_argument("--control-n", type=int, default=256)
+    ap.add_argument("--control-batch", type=int, default=64, help="lower it on small GPUs (4 GB: 16)")
     ap.add_argument(
         "--real-limit", type=int, default=None, help="real images for DINOv2 stats (default: all)"
     )
@@ -96,7 +97,7 @@ def main() -> None:
         if args.kind == "teacher"
         else one_step_sampler(model, args.steps)
     )
-    rae = RAE(load_encoder=False).to(dev)
+    rae = RAE(load_encoder=False)  # kept on the CPU until a metric decodes (1.7 GB of fp32 weights)
     result: dict = {
         "tag": args.tag,
         "ckpt": args.ckpt,
@@ -121,6 +122,8 @@ def main() -> None:
         if img_dir.exists():
             shutil.rmtree(img_dir)
         img_dir.mkdir(parents=True)
+        if need_images:
+            rae.to(dev)
         pool = ThreadPoolExecutor(8)
         t0, written = time.perf_counter(), 0
         for z, _ in iterate_latents(sample_fn, args.n, args.batch, k, dev, seed=0, autocast=prec.autocast):
@@ -189,7 +192,8 @@ def main() -> None:
             )
             print(f"[eval] FID ({mode}) = {result[f'fid_{mode}']}", flush=True)
         torch.cuda.empty_cache()
-    rae.to(dev)
+    if "speed" in metrics:  # memorisation and control work on latents; only the speed test decodes
+        rae.to(dev)
 
     # ---------------------------------------------------------------- memorisation audit (DINOv3 space)
     if "memo" in metrics and pooled:
@@ -264,7 +268,7 @@ def main() -> None:
                 for z, _ in iterate_latents(
                     csample,
                     args.control_n,
-                    64,
+                    args.control_batch,
                     k,
                     dev,
                     seed=100 + j,

@@ -67,6 +67,8 @@ Mean controllability accuracy: **89.9%**. At the default IG 1.78 it was 84.4%.
 
 The probe over-fires on *generated* latents. For the rarer attributes (hat, goatee, sideburns, gray hair, blond hair) it calls 13%–20% of unconditional samples positive, while FFHQ has 3%–9%. Internal Guidance extrapolation inflates latent statistics: latent std is 1.18 at IG 1.55, vs 1.02 without guidance and 1.03 for real FFHQ latents (1.36 at the default 1.78) (`scripts/latent_stats.py`). So the absolute percentages are approximate; the shift from the base-rate column is the controllable effect.
 
+One-step students (one network evaluation, so no CFG), same test on the demo laptop (GeForce GTX 1650 Ti, fp32): fixed GAN **84.5%**, W-Flow **92.4%** mean agreement. W-Flow scored 91.8% on the 4090 in bf16.
+
 ### Memorisation audit (DINOv3 space, 10,000 samples vs every training face)
 
 - Nearest-training-face cosine similarity: generated median **0.58** (p99 0.79), vs training-to-training median 0.82 (p99 0.97).
@@ -107,17 +109,17 @@ With IG 1.78, 25 steps score better than 50 (4.65 vs 6.08).
 
 | Graph | max abs error vs PyTorch | ONNX Runtime ms/face | eager PyTorch ms/face | size |
 |---|---|---|---|---|
-| 1-step generator | 2.3e-05 | 751 | 952 | 726 MB |
-| RAEv2 decoder | 1.0e-05 | 1531 | 1913 | 1667 MB |
-| decoder, weight-only int8, block 32 (MatMulNBits) | PSNR 44.5 dB vs fp32 | 2699 | – | 474 MB |
+| 1-step generator (fixed GAN) | 4.9e-05 | 825 | 1026 | 726 MB |
+| RAEv2 decoder | 1.3e-05 | 1765 | 2151 | 1667 MB |
+| decoder, weight-only int8, block 32 (MatMulNBits) | PSNR 44.4 dB vs fp32 | 3129 | – | 474 MB |
 
 Dynamic int8 (activations quantised too) broke the ViT-XL decoder in testing (9–11 dB): its activation outliers need per-block weight-only quantisation. Weight-only int8 is 3.5× smaller but not faster on this CPU.
 
-### Invisible watermark on every demo output (TrustMark Q (BCH text payload), 64 generated faces)
+### Invisible watermark on every demo image (TrustMark Q (BCH text payload), 128 generated faces, teacher and one-step GAN, embedded on the GPU)
 
 | PNG | JPEG q75 | JPEG q50 | 2× down/up-scale | 90% centre crop | PSNR | false positives (real / unmarked) |
 |---|---|---|---|---|---|---|
-| 100% | 100% | 95.3% | 100% | 100% | 43.4 dB | 0% / 0% |
+| 100% | 100% | 100% | 100% | 100% | 43.1 dB | 0% / 0% |
 
 ### RAEv2 decoder on faces (reconstruction gate)
 
@@ -148,26 +150,39 @@ Teacher: 46,708 steps, 11.96M samples, 10.8 h on NVIDIA GeForce RTX 4090 (182.9M
 
 ## Live demo (runs on a 4 GB laptop GPU)
 
-`uv run --extra demo python app/gradio_app.py` starts a Gradio app on the
-GTX 1650 Ti laptop. It uses the teacher, the 1-step W-Flow student and the probe, and falls back to ONNX Runtime on
-CPU-only machines. The screenshots below are taken by [`scripts/demo_screenshots.py`](scripts/demo_screenshots.py),
-driving the real app in Edge.
+`uv run --extra demo python app/gradio_app.py` starts a Gradio app on the GTX 1650 Ti laptop. It loads the teacher,
+the one-step **fixed GAN** student and the probe, and falls back to ONNX Runtime on CPU-only machines. The screenshots
+below are taken by [`scripts/demo_screenshots.py`](scripts/demo_screenshots.py), driving the real app in Edge. All
+timings are on the laptop, warm and CUDA-synchronised.
 
-**Generate:** 8 one-step faces for *female + eyeglasses + blond + smiling*. Timings are on the laptop (CUDA-synchronised,
-warm): the generator takes 71 ms/face, the RAEv2 decoder 146 ms/face and the TrustMark watermark 273 ms/face on the
-CPU, so the watermark, not the model, is the laptop bottleneck. The probe's confidence for every attribute of every
-face is listed underneath.
+**Generate:** 8 one-step faces for *female + eyeglasses + blond + smiling* in about 2 s. The generator takes
+72–75 ms/face, the RAEv2 decoder 154–158 ms/face and the TrustMark watermark 21–35 ms/face. The watermark now runs on
+the GPU; on the CPU it took 273 ms/face, more than the model itself. Each caption lists the attributes the DINOv3
+probe detects in that face, with the full probabilities one click away. Every downloaded PNG carries "AI-generated"
+metadata with its sampler, seed and attributes. If you request an attribute the loaded student measured below 50% on
+(for the GAN: goatee, sideburns and beard), the demo says so and points to the teacher.
 
 ![demo: generate](docs/assets/demo_generate.jpg)
 
-**Edit** (same seed, one attribute flipped) and **Under the hood** (the teacher's clean-image prediction across the
-ODE; note the over-saturation that Internal Guidance adds in the last steps, quantified in the results):
+**Compare samplers:** the same noise through the one-step GAN and the teacher at 10, 25 and 50 steps, each captioned
+with its live time and measured FID. On the laptop that is 108 ms, 0.77 s, 1.88 s and 3.81 s per face. The teacher
+defaults to **25 steps** everywhere in the demo: at the tuned guidance it scored better than 50 on FID-10k (4.79 vs
+5.23) in half the time. The headline FID-50k (3.78) was measured at 50 steps, and 25 steps were only scored on 10k
+samples. For this seed the GAN draws a different child than the teacher does: its training ties only its anchor
+noises to teacher outputs, so a new seed need not map to the teacher's face.
+
+![demo: compare samplers](docs/assets/demo_compare.jpg)
+
+**Edit** shows one attribute requested absent, left to the model, and present, from the same noise. **Under the
+hood** shows the teacher's clean-image prediction across the ODE; note the over-saturation that Internal Guidance adds
+in the last steps, quantified in the results. It also has the measured-metrics table and the memorisation audit.
 
 ![demo: edit](docs/assets/demo_edit.jpg)
 ![demo: trajectory](docs/assets/demo_trajectory.jpg)
 
-The **Morph** tab renders a spherical interpolation between two seeds as a video. The **Check watermark** tab detects
-the invisible mark in any uploaded image.
+The **Morph** tab renders a spherical interpolation between two seeds as a video. Its frames are watermarked before
+H.264 encoding, and all 16 frames of a test video still carried the mark. The **Check watermark** tab detects the
+invisible mark in any uploaded image.
 
 ## How it works
 
@@ -230,13 +245,14 @@ Everything below happened during this project's cloud runs: the main run on a Ru
 | **Grey samples at 1M training samples** | The EMA half-life of 1.4M samples has no warm-up, so 61% of the EMA was still the zero-initialised output layer. | Checked the raw weights instead: they already made faces after 40 min. Documented, not "fixed", so results come from the exact code that ran. |
 | **W-Flow OOM at batch 128** | In eager mode, the teacher, EMA and AdamW states plus activations exceeded 24 GB. | Activation checkpointing for the student and the discriminator trunk: peak 10.9 GiB (W-Flow) and 7.6 GiB (GAN). |
 | **The GAN student collapsed to one face** | FID 207, recall 0, with the discriminator sitting at chance. | Second attempt: a pseudo-Huber anchor to 6,144 teacher ODE pairs (`onestep.py gan --anchor-pairs`). The collapse is gone (FID 207 → 33.1, recall 0 → 0.155), but it still lost to W-Flow (23.0). The next row explains why. |
-| **…and a code review later found why** | `renoise` clamped the teacher's timestep distribution (median t = 0.89) at 0.7, so ~89% of the discriminator's inputs were at exactly t = 0.7, i.e. 70% noise. A D that almost never sees clean latents cannot judge detail or diversity. Both GAN runs above used this bug. | Fixed: uniform t on (0, 0.7], with a regression test. Retrained with only this change, on a Colab A100 with the same data, anchors, batch and 2,053 steps: FID 33.1 → **20.0**, recall 0.155 → **0.339**, FD_DINOv2 505 → 239. The fixed GAN now beats W-Flow on all four metrics. |
+| **…and a code review later found why** | `renoise` clamped the teacher's timestep distribution (median t = 0.89) at 0.7, so ~89% of the discriminator's inputs were at exactly t = 0.7, i.e. 70% noise. A D that almost never sees clean latents cannot judge detail or diversity. Both GAN runs above used this bug. | Fixed: uniform t on (0, 0.7], with a regression test. Retrained with only this change, on a Colab A100 with the same data, anchors, batch and 2,053 steps: FID 33.1 → **20.0**, recall 0.155 → **0.339**, FD_DINOv2 505 → 239. The fixed GAN now beats W-Flow on all four image metrics, though not on attribute control (see Limitations). |
 | **An evaluation precision leak (found in code review)** | `iterate_latents` yielded from inside its `autocast` block, and autocast is thread-global. So on the 4090, generated images were decoded and featurised in bf16, while the real FFHQ features were fp32. | Fixed, with a regression test. Measured on the same 2,000 latents (`scripts/autocast_leak_check.py`): FD_DINOv2 moves by 0.03%, precision/recall by ≤ 0.005 (sampling noise) and decoded images differ by 53 dB PSNR, so every reported number stands. |
 | **The last results were stranded on a stopped pod** | The budget deadman stopped the pod at the spending cap, as designed, before the ablation stage's results were pulled. My laptop-side watcher had matched its own echoed command, so it never triggered the pull. A Community pod's disk lives on its host, and that GPU was re-rented, so the pod couldn't restart. | Recovered by resuming the pod as a GPU-less *transfer* pod, then verified file-for-file against the pod. Lesson for next time: pull after every stage, or use a network volume that isn't tied to one host. |
 | **The Kaggle TPU job never started** | It sat `QUEUED` for over an hour on a TPU v5e-8, and Kaggle shows no queue position. The account was verified, with no TPU hours used. "Toggling" the accelerator did not reset the reservation. | Cancelled and moved to Colab, where VMs start in seconds. |
 | **The TPU port failed on its first real TPU** | The torch_xla support had been tested only on CPU and CUDA. On a Colab v6e-1, 5 of 8 rehearsal jobs failed. First, attention got float32 q/k with bf16 v: CUDA autocast casts SDPA inputs, XLA's does not (`models/layers.py:68`). Second, `torch_xla.launch` expected 4 chips on the 1-chip VM. | **Not fixed, by choice.** The A100 was cheaper per result and keeps numbers comparable with the 4090 runs, so the TPU path is marked unverified. Bugs and likely fixes: [docs/compute_platforms.md](docs/compute_platforms.md#3-the-tpu-torch_xla-port-two-known-bugs-not-fixed). |
 | **Colab refused large transfers** | `colab upload` / `download` send a file as one base64 request, and ~50 MB+ is refused. Colab images also ship `/kaggle/input`, which fooled the driver's platform check. | 40 MB parts with a sha256 manifest, reassembled and verified at both ends. Colab is now detected by `COLAB_RELEASE_TAG` (`scripts/colab/`). |
 | **The watermark didn't work** | `invisible-watermark` DWT-DCT recovered 0 of 6 marks on 256 px faces and changed pixels by up to 179 levels. | Replaced it with TrustMark: 100% recovery after PNG, JPEG q75, rescaling and cropping, 43 dB PSNR, and 0 false positives (`scripts/watermark_eval.py`). |
+| **The "AI-generated" PNG metadata was never written** | Found while switching the demo to the GAN: the helper that writes provenance text chunks was never called. Gradio re-encoded the PIL images itself, so every downloaded PNG lacked the metadata the model card promised. | The demo now writes each PNG itself and hands Gradio the file. Checked on files downloaded through the app's API: all carry the AI-generated flag, sampler, seed and attributes. |
 
 | EMA, 1.0M samples | raw weights, 0.72M samples |
 |---|---|
@@ -262,8 +278,8 @@ uv run python scripts/colab/stage_inputs.py             # then, from WSL/Linux: 
 uv run python scripts/make_report.py                    # rebuilds the results section from runs/**/*.json
 uv run python legacy/dcgan.py train && uv run --extra eval python legacy/dcgan.py fid    # "before" baseline
 uv run python scripts/latent_stats.py --ckpt runs/teacher_b/ckpt/ema.safetensors
-uv run --extra demo python scripts/watermark_eval.py
-uv run --extra demo python scripts/export_onnx.py --student runs/student_wflow/student.safetensors --int8
+uv run --extra demo python scripts/watermark_eval.py --device cuda
+uv run --extra demo python scripts/export_onnx.py --student runs/student_gan_fixed/student.safetensors --int8
 uv run --extra demo python app/gradio_app.py            # live demo
 ```
 
@@ -293,11 +309,15 @@ its "latent consistency" loss penalised output differences between nearby latent
   ablation). W-Flow here is my adaptation (drift in the RAEv2 latent itself, teacher initialisation), not the paper's
   exact setup.
 - GAN vs W-Flow rests on one training run each, on comparable budgets: 43 min for the GAN, including its teacher
-  anchors, vs 45 min for W-Flow. The fixed GAN wins on all four metrics, by wide margins on FD_DINOv2 (239 vs 376) and
-  recall (0.34 vs 0.16), so the direction is clear, but the exact margins are single-run numbers.
+  anchors, vs 45 min for W-Flow. The fixed GAN wins on all four image metrics, by wide margins on FD_DINOv2 (239 vs
+  376) and recall (0.34 vs 0.16), so the direction is clear, but the exact margins are single-run numbers.
+- **The GAN wins on image quality but loses on control.** It has lost facial hair: asked for a goatee, sideburns or a
+  beard, it renders them 0%, 10% and 11% of the time, where the teacher and W-Flow manage 98%–100%. Its mean attribute
+  agreement is 84.5% vs 92.4% for W-Flow. The cause was not investigated. The demo still uses the GAN for its real-time
+  mode (better faces), warns when one of these attributes is requested, and the teacher handles all 12.
 - The default guidance scale (1.78, chosen before training) over-guides: it inflates latent statistics by about a
-  third and costs FID (4.60 vs 3.78 at 1.55). The attribute-control numbers were measured at 1.78, so the probe
-  rates there carry that inflation (explained next to the table).
+  third and costs FID (4.60 vs 3.78 at 1.55). Attribute control is reported at the tuned 1.55, where the inflation is
+  smaller (latent std 1.18 vs 1.36), but the probe rates still carry some of it (explained next to the table).
 - TPU support (torch_xla: `--tpu`, `PJRT_DEVICE=TPU`) is in the code but **unverified**. Its first real run hit two
   known bugs that were left unfixed ([details](docs/compute_platforms.md)). CUDA GPUs and CPU are the supported
   paths.

@@ -1,6 +1,6 @@
 """Measure the demo watermark: recovery under common edits, invisibility, and false positives.
 
-    uv run --extra demo python scripts/watermark_eval.py --grid runs/eval/teacher_grid.png --data data/ffhq-256
+    uv run --extra demo python scripts/watermark_eval.py --device cuda         --grid runs/eval/teacher_tuned_grid.png runs/eval/gan_fixed_1step_grid.png --data data/ffhq-256
 
 Writes runs/eval/watermark.json.
 """
@@ -57,41 +57,47 @@ def grid_tiles(path: str, n: int, tile: int = 256, pad: int = 2) -> list[Image.I
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument(
-        "--grid", default="runs/eval/teacher_grid.png", help="grid of generated faces (evaluate.py)"
+        "--grid",
+        nargs="+",
+        default=["runs/eval/teacher_tuned_grid.png", "runs/eval/gan_fixed_1step_grid.png"],
+        help="grids of generated faces (evaluate.py); the demo shows teacher and one-step faces",
     )
     ap.add_argument("--data", default="data/ffhq-256", help="real faces for the false-positive check")
-    ap.add_argument("--n", type=int, default=64)
+    ap.add_argument("--n", type=int, default=64, help="faces per grid; as many real faces as marked ones")
+    ap.add_argument("--device", default="cpu", help="TrustMark device (the demo uses cuda when available)")
     ap.add_argument("--out", default="runs/eval/watermark.json")
     a = ap.parse_args()
-    gen = grid_tiles(a.grid, a.n)
+    gen = [tile for g in a.grid for tile in grid_tiles(g, a.n)]
     real = []
     for batch in iter_rows(list_shards(a.data), ["image"], batch_rows=256):
         real += [Image.fromarray(decode_image(c, 256)) for c in batch["image"]]
-        if len(real) >= a.n:
+        if len(real) >= len(gen):
             break
-    real = real[: a.n]
+    real = real[: len(gen)]
 
     hits = dict.fromkeys(ATTACKS, 0)
     psnr, t0 = [], time.perf_counter()
     for im in gen:
-        w = add_watermark(im)
+        w = add_watermark(im, a.device)
         diff = np.asarray(w, np.float64) - np.asarray(im, np.float64)
         psnr.append(10 * np.log10(255**2 / max(float(np.mean(diff**2)), 1e-12)))
         for name, attack in ATTACKS.items():
-            hits[name] += check_watermark(attack(w))
+            hits[name] += check_watermark(attack(w), a.device)
     embed_check_s = (time.perf_counter() - t0) / len(gen)
-    fp_gen = sum(check_watermark(im) for im in gen)
-    fp_real = sum(check_watermark(im) for im in real)
+    fp_gen = sum(check_watermark(im, a.device) for im in gen)
+    fp_real = sum(check_watermark(im, a.device) for im in real)
     result = {
         "method": "TrustMark Q (BCH text payload)",
         "n_marked": len(gen),
+        "grids": a.grid,
+        "device": a.device,
         "recovery": {k: round(v / len(gen), 4) for k, v in hits.items()},
         "psnr_db_mean": round(float(np.mean(psnr)), 2),
         "psnr_db_min": round(float(np.min(psnr)), 2),
         "false_positive_rate_unmarked_generated": round(fp_gen / len(gen), 4),
         "false_positive_rate_real_ffhq": round(fp_real / len(real), 4),
         "n_real": len(real),
-        "cpu_seconds_per_image_embed_plus_5_checks": round(embed_check_s, 2),
+        "seconds_per_image_embed_plus_5_checks": round(embed_check_s, 2),
     }
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)
     Path(a.out).write_text(json.dumps(result, indent=2))

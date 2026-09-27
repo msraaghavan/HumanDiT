@@ -3,7 +3,7 @@
     uv run python app/gradio_app.py ...          # in another terminal (http://localhost:7860)
     uv run python scripts/demo_screenshots.py    # uses the installed Microsoft Edge (channel msedge)
 
-Writes docs/assets/demo_generate.jpg, demo_edit.jpg, demo_trajectory.jpg.
+Writes docs/assets/demo_generate.jpg, demo_edit.jpg, demo_compare.jpg, demo_trajectory.jpg.
 """
 
 from __future__ import annotations
@@ -57,11 +57,10 @@ def main() -> None:
             quality=90,
         )
 
-        # Edit: same seed, one attribute flipped (1-step student, instant)
+        # Edit: same seed, one attribute absent / unspecified / present (1-step student, the tab's default)
         page.get_by_role("tab", name="Edit").click()
-        page.get_by_label("1-step (real-time student)").last.check()
-        page.get_by_role("button", name="Show absent vs present").click()
-        page.locator("[role=tabpanel]:visible img").nth(1).wait_for(timeout=180_000)
+        page.get_by_role("button", name="Show absent · any · present").click()
+        page.locator("[role=tabpanel]:visible img").nth(2).wait_for(timeout=180_000)
         page.wait_for_timeout(2500)
         page.evaluate("window.scrollTo(0, 0)")
         page.wait_for_timeout(500)
@@ -69,10 +68,23 @@ def main() -> None:
             path=str(out / "demo_edit.jpg"), clip={"x": 0, "y": 0, "width": 1280, "height": 620}, quality=90
         )
 
+        # Compare samplers: one-step student vs the teacher at 10 / 25 / 50 steps, same noise
+        page.get_by_role("tab", name="Compare samplers").click()
+        page.get_by_role("button", name="Compare", exact=True).click()
+        page.get_by_text("teacher · 50 steps").wait_for(timeout=300_000)  # the caption, not the page header
+        page.wait_for_timeout(2500)
+        page.evaluate("window.scrollTo(0, 0)")
+        page.wait_for_timeout(500)
+        page.screenshot(
+            path=str(out / "demo_compare.jpg"),
+            clip={"x": 0, "y": 0, "width": 1280, "height": 730},
+            quality=90,
+        )
+
         # Under the hood: teacher trajectory (multi-step, slower on a laptop GPU)
         page.get_by_role("tab", name="Under the hood").click()
         page.get_by_role("button", name="Show trajectory").click()
-        page.get_by_text("step 50").wait_for(timeout=300_000)
+        page.get_by_text("step 25/25").wait_for(timeout=300_000)
         page.wait_for_timeout(1500)
         page.evaluate("window.scrollTo(0, 0)")
         page.wait_for_timeout(500)

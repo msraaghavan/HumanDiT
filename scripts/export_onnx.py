@@ -1,6 +1,6 @@
 """Export the one-step generator and the RAEv2 decoder to ONNX for CPU inference, verify against PyTorch.
 
-    uv run --extra demo python scripts/export_onnx.py --student runs/student_wflow/student.safetensors
+    uv run --extra demo python scripts/export_onnx.py --student runs/student_gan_fixed/student.safetensors
     uv run --extra demo python scripts/export_onnx.py --student ... --int8     # + weight-only int8 decoder
 
 Writes onnx/generator_1step.onnx, onnx/decoder.onnx (and decoder_int8.onnx) plus onnx/export_report.json with

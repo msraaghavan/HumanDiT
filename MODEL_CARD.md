@@ -39,14 +39,18 @@ Smiling and Mouth Open. Bald, Mustache and Wearing Necktie passed the CelebA acc
   treat absolute rates as approximate.
 - Memorisation: 0 of 10,000 teacher samples exceeded the 99.9th-percentile training-to-training similarity at either
   guidance scale, and neither did the fixed one-step GAN student. The most similar pairs show different people.
-- One-step students (1 network evaluation, 20× faster than the teacher, far less diverse):
-  - The fixed adversarial student is the best: FID-50k 20.0, FD_DINOv2 239, precision 0.728 and recall 0.339 (vs
-    0.680 for the teacher).
+- One-step students (1 network evaluation, 20× faster than the 50-step teacher, far less diverse):
+  - The fixed adversarial student has the best image statistics: FID-50k 20.0, FD_DINOv2 239, precision 0.728 and
+    recall 0.339 (vs 0.680 for the teacher).
+  - But it has lost facial-hair control. Asked for a goatee, sideburns or a beard, it renders them 0%, 10% and 11% of
+    the time (teacher 99%, W-Flow 98–100%). Its mean attribute agreement is 84.5% vs 92.4% for W-Flow (same probe
+    test, both on the laptop GPU; W-Flow scored 91.8% on the 4090). The cause was not investigated.
   - W-Flow reaches FID 23.0, FD_DINOv2 376 and recall 0.163.
   - The adversarial student's first run collapsed (FID 207, recall 0). An anchored retry reached FID 33.1. Both had
     a discriminator noise-level bug; fixing it alone produced the 20.0.
   - One training run each.
-  - The demo's real-time mode currently uses the W-Flow student.
+  - The demo's real-time mode uses the fixed GAN student. It warns when a requested attribute is one the student
+    follows less than half the time, and the teacher handles all 12.
 
 ## Known biases and limitations
 - FFHQ over-represents some age groups, ethnicities and photographic styles. Under-represented groups are likely to
@@ -55,12 +59,17 @@ Smiling and Mouth Open. Bald, Mustache and Wearing Necktie passed the CelebA acc
 - Quality is measured with FID, FD_DINOv2 and precision/recall, which capture only part of perceptual quality.
 
 ## Safety measures
-- Every demo output carries an invisible TrustMark watermark (Adobe, MIT licence, the neural watermark used in the
-  Content Credentials ecosystem) and "AI-generated" PNG metadata, and the demo includes a watermark checker. Measured on
-  64 generated faces (`scripts/watermark_eval.py`):
-  - recovered after 100% of PNG, JPEG q75, 2× rescaling and 90% crops, and 95% of JPEG q50;
+- Every demo image carries an invisible TrustMark watermark (Adobe, MIT licence, the neural watermark used in the
+  Content Credentials ecosystem) and "AI-generated" PNG metadata (sampler, seed, attributes), and the demo includes a
+  watermark checker. Measured on 128 generated faces, 64 from the teacher and 64 from the one-step GAN
+  (`scripts/watermark_eval.py --device cuda`):
+  - recovered after 100% of PNG, JPEG q75, JPEG q50, 2× rescaling and 90% crops;
   - PSNR 43 dB;
-  - 0 false positives on 64 real and 64 unmarked faces.
+  - 0 false positives on 128 real and 128 unmarked faces.
+  - The Morph tab's video frames are marked before H.264 encoding; all 16 frames of a test video still carried it.
+
+  Until this release the PNG metadata was claimed but missing: the demo let Gradio re-encode the images, which drops
+  text chunks. The demo now writes the PNGs itself, and the metadata was checked on downloaded files.
 
   A determined adversary can still remove it. The first implementation (DWT-DCT, invisible-watermark 0.2) failed
   this check (0 of 6 recovered) and was replaced.
