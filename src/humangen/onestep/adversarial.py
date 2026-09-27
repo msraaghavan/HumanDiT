@@ -2,8 +2,14 @@
 
 Discriminator = the frozen teacher trunk (DINOv3-latent DiT, already an expert on faces) evaluated on
 re-noised real/fake latents, with light trainable heads on several trunk depths (LADD-style).
-Conditioning enters through the trunk's attribute tokens, so D judges image *and* attribute fit.
-Regularisation: approximated R1 (APT, Lin et al. 2025): penalise D's sensitivity to small input noise.
+Conditioning enters through the trunk's attribute tokens. Regularisation: approximated R1 (APT, Lin et al. 2025):
+penalise D's sensitivity to small input noise.
+
+Attribute-aware D (optional, `attr_heads` + `mismatch_weight`): conditioning through the tokens alone gave D no reason
+to check the requested attributes, and in both anchored GAN runs the student lost facial hair between steps 1,000 and
+1,500 (goatee requested -> drawn 100% at step 500, ~4% at the end; W-Flow kept it). So D can also read the attribute
+tokens (which attend to the image in every trunk block), and it is trained to reject real latents whose conditions
+contradict them (one specified attribute flipped): the matching-aware discriminator of Reed et al. (2016).
 """
 
 from __future__ import annotations
@@ -17,10 +23,21 @@ from torch.utils.checkpoint import checkpoint
 
 from humangen.diffusion.transport import Transport
 from humangen.models.dit_dh import HumanDiTDH
+from humangen.models.layers import AttributeTokens
+
+
+def _head(d: int, hidden: int) -> nn.Module:
+    return nn.Sequential(nn.LayerNorm(d), nn.Linear(d, hidden), nn.SiLU(), nn.Linear(hidden, 1))
 
 
 class TrunkDiscriminator(nn.Module):
-    def __init__(self, teacher: HumanDiTDH, layers: tuple[int, ...] = (3, 6, 9, 12), hidden: int = 256):
+    def __init__(
+        self,
+        teacher: HumanDiTDH,
+        layers: tuple[int, ...] = (3, 6, 9, 12),
+        hidden: int = 256,
+        attr_heads: bool = False,
+    ):
         super().__init__()
         t = copy.deepcopy(teacher)
         self.cfg = t.cfg
@@ -29,14 +46,17 @@ class TrunkDiscriminator(nn.Module):
         for p in self.parameters():
             p.requires_grad_(False)
         self.layers = layers
+        self.n_extra = self.attr_embedder.extra.shape[0]  # extra tokens appended after the attribute slots
         d = self.cfg.trunk_dim
-        self.heads = nn.ModuleList(
-            nn.Sequential(nn.LayerNorm(d), nn.Linear(d, hidden), nn.SiLU(), nn.Linear(hidden, 1))
-            for _ in layers
-        )
+        self.heads = nn.ModuleList(_head(d, hidden) for _ in layers)
+        # heads on the attribute slots: each slot attends to the image, so it can say whether its state fits it
+        self.attr_heads = nn.ModuleList(_head(d, hidden) for _ in layers) if attr_heads else None
 
-    def trainable_parameters(self):
-        return self.heads.parameters()
+    def trainable_parameters(self) -> list[nn.Parameter]:
+        return [
+            *self.heads.parameters(),
+            *(self.attr_heads.parameters() if self.attr_heads is not None else []),
+        ]
 
     def forward(self, x: torch.Tensor, t: torch.Tensor, attrs: torch.Tensor) -> torch.Tensor:
         """x: latent (B,C,H,W) at noise level t -> logits (B,)."""
@@ -54,8 +74,27 @@ class TrunkDiscriminator(nn.Module):
                 seq = blk(seq, self.rope)
             if i + 1 in self.layers:
                 out = out + self.heads[hi](seq[:, :n]).mean(dim=(1, 2))
+                if self.attr_heads is not None:
+                    end = seq.shape[1] - self.n_extra
+                    out = out + self.attr_heads[hi](seq[:, end - attrs.shape[1] : end]).mean(dim=(1, 2))
                 hi += 1
         return out
+
+
+def flip_one_attribute(attrs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """Contradicting conditions for a matching-aware D: in each row, one specified attribute (yes/no, chosen uniformly)
+    flipped to its opposite. Rows with nothing specified cannot be contradicted and come back unchanged, valid = False.
+    """
+    specified = attrs != AttributeTokens.NULL
+    valid = specified.any(dim=1)
+    j = torch.rand(attrs.shape, device=attrs.device).masked_fill(~specified, -1.0).argmax(dim=1)
+    rows = torch.arange(attrs.shape[0], device=attrs.device)
+    flipped = attrs.clone()
+    yes = flipped[rows, j] == AttributeTokens.YES
+    flipped[rows, j] = torch.where(
+        yes, torch.full_like(j, AttributeTokens.NO), torch.full_like(j, AttributeTokens.YES)
+    )
+    return torch.where(valid[:, None], flipped, attrs), valid
 
 
 def renoise(x: torch.Tensor, transport: Transport, t_max: float = 0.7) -> tuple[torch.Tensor, torch.Tensor]:
@@ -77,12 +116,18 @@ def d_loss(
     transport: Transport,
     r1_weight: float,
     r1_sigma: float,
+    mismatch_weight: float = 0.0,
 ) -> tuple[torch.Tensor, dict]:
     xr, tr = renoise(real, transport)
     xf, tf = renoise(fake.detach(), transport)
     lr_, lf = d(xr, tr, real_attrs), d(xf, tf, fake_attrs)
     loss = F.softplus(-lr_).mean() + F.softplus(lf).mean()
     info = {"d_real": lr_.detach().mean(), "d_fake": lf.detach().mean()}  # tensors: no host sync per step
+    if mismatch_weight > 0:  # a real face under a contradicted condition counts as fake
+        wrong, valid = flip_one_attribute(real_attrs)
+        lm, v = d(xr, tr, wrong), valid.float()
+        loss = loss + mismatch_weight * (F.softplus(lm) * v).sum() / v.sum().clamp_min(1.0)
+        info["d_mismatch"] = (lm.detach() * v).sum() / v.sum().clamp_min(1.0)
     if r1_weight > 0:  # approximated R1: || D(x) - D(x + sigma*eps) ||^2 on real inputs
         pert = d(xr + r1_sigma * torch.randn_like(xr), tr, real_attrs)
         r1 = (pert - lr_).pow(2).mean()

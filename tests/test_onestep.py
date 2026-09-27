@@ -2,7 +2,8 @@ import torch
 
 from humangen.diffusion.transport import Transport
 from humangen.models.dit_dh import HumanDiTDH, make_config
-from humangen.onestep.adversarial import TrunkDiscriminator, d_loss, g_loss, renoise
+from humangen.models.layers import AttributeTokens
+from humangen.onestep.adversarial import TrunkDiscriminator, d_loss, flip_one_attribute, g_loss, renoise
 from humangen.onestep.wflow import barycentric_map, grouped_wflow_loss, sinkhorn_plan, wflow_loss
 
 
@@ -70,3 +71,33 @@ def test_renoise_spreads_discriminator_noise_levels():
     assert (t > 0.7 - 1e-6).float().mean() < 0.01
     assert abs(t.mean().item() - 0.35) < 0.02
     assert (t < 0.2).float().mean() > 0.25  # near-clean inputs, where detail is visible, are common
+
+
+def test_flip_one_attribute_contradicts_exactly_one_specified_attribute():
+    Y, N, U = AttributeTokens.YES, AttributeTokens.NO, AttributeTokens.NULL
+    attrs = torch.tensor([[Y, U, N], [U, U, U], [N, N, N], [U, Y, U]])
+    for seed in range(20):
+        torch.manual_seed(seed)
+        flipped, valid = flip_one_attribute(attrs)
+        assert valid.tolist() == [True, False, True, True]
+        changed = flipped != attrs
+        assert changed[valid].sum(dim=1).eq(1).all()  # exactly one attribute contradicted per valid row
+        assert not changed[~valid].any()  # nothing specified: nothing to contradict
+        assert not changed[attrs == U].any()  # unspecified attributes stay unspecified
+        assert (flipped[changed] != U).all()
+
+
+def test_attribute_aware_discriminator_reads_the_conditions():
+    torch.manual_seed(0)
+    teacher = HumanDiTDH(make_config("T", num_attributes=3))
+    disc = TrunkDiscriminator(teacher, layers=(1, 2, 4), attr_heads=True)
+    x, t = torch.randn(2, 1024, 16, 16), torch.full((2,), 0.3)
+    yes = torch.full((2, 3), AttributeTokens.YES)
+    assert not torch.allclose(disc(x, t, yes), disc(x, t, torch.full((2, 3), AttributeTokens.NO)))
+    real = torch.randn(2, 1024, 16, 16)
+    ld, info = d_loss(disc, real, yes, torch.randn(2, 1024, 16, 16), yes, Transport(), 0.0, 0.01, 1.0)
+    ld.backward()
+    assert "d_mismatch" in info and torch.isfinite(ld)
+    assert any(p.grad is not None and p.grad.abs().sum() > 0 for p in disc.attr_heads.parameters())
+    assert all(p.grad is None for p in disc.trunk.parameters())
+    assert len(disc.trainable_parameters()) == 2 * len(list(disc.heads.parameters()))

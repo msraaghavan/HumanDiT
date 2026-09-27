@@ -3,11 +3,15 @@
     python scripts/onestep.py wflow --teacher runs/teacher_b/ckpt/ema.safetensors --minutes 60
     python scripts/onestep.py gan   --teacher runs/teacher_b/ckpt/ema.safetensors --minutes 60
     python scripts/onestep.py gan   --teacher ... --anchor-pairs 8192    # + regression to teacher ODE outputs
+    python scripts/onestep.py gan   --teacher ... --anchor-pairs 6144 --d-attr-heads --d-mismatch 1   # attribute-aware D
 
 Without an anchor, the adversarial student mode-collapsed (one face for every noise; FID 207). The anchor
 regresses the student onto teacher ODE samples for fixed (noise, attributes) pairs with a pseudo-Huber loss, which
 pins diversity (FID 33.1). A later review found a likely root cause of the weak GAN: the discriminator's noise levels
 were clamped so ~89% of its inputs sat at t = 0.7 (see `renoise`, now fixed); both reported GAN runs used that bug.
+With the fix, the student still lost facial hair during training (scripts/control_diagnosis.py); --d-attr-heads and
+--d-mismatch make the discriminator check the requested attributes, and --adv-weight 0 (anchors only) is the ablation.
+--control-every logs the probe's attribute rates for single-attribute requests during training.
 """
 
 from __future__ import annotations
@@ -26,6 +30,7 @@ import torch
 from safetensors.torch import save_file
 from torchvision.utils import save_image
 
+from humangen.data.attributes import Probe
 from humangen.data.latents import LatentDataset, drop_attributes
 from humangen.diffusion.guidance import GuidanceConfig, guided_model_fn
 from humangen.diffusion.transport import Transport, dimension_shift
@@ -98,6 +103,20 @@ def main() -> None:
     ap.add_argument("--anchor-batch", type=int, default=32)
     ap.add_argument("--anchor-weight", type=float, default=1.0)
     ap.add_argument("--anchor-c", type=float, default=0.03, help="pseudo-Huber constant (latent units)")
+    ap.add_argument("--adv-weight", type=float, default=1.0, help="GAN: 0 = anchors only (no discriminator)")
+    ap.add_argument(
+        "--d-attr-heads", action="store_true", help="GAN: discriminator heads on the attribute tokens too"
+    )
+    ap.add_argument(
+        "--d-mismatch",
+        type=float,
+        default=0.0,
+        help="GAN: weight of the matching-aware term (real latents under a contradicted attribute are fake)",
+    )
+    ap.add_argument(
+        "--control-every", type=int, default=0, help="log probe control rates every N steps (0 = off)"
+    )
+    ap.add_argument("--probe", default="runs/attributes/attribute_probe.pt")
     ap.add_argument(
         "--tpu",
         action="store_true",
@@ -144,8 +163,9 @@ def run(args: argparse.Namespace) -> None:
         student.parameters(), lr=args.lr, betas=(0.0 if args.method == "gan" else 0.9, 0.99), weight_decay=0.0
     )
     disc = opt_d = None
-    if args.method == "gan":
-        disc = TrunkDiscriminator(teacher).to(dev)
+    adversarial = args.method == "gan" and args.adv_weight > 0
+    if adversarial:
+        disc = TrunkDiscriminator(teacher, attr_heads=args.d_attr_heads).to(dev)
         opt_d = torch.optim.AdamW(
             disc.trainable_parameters(), lr=args.d_lr, betas=(0.0, 0.99), weight_decay=0.0
         )
@@ -202,6 +222,25 @@ def run(args: argparse.Namespace) -> None:
     fixed_attrs = torch.zeros(16, k, dtype=torch.long, device=dev)
     for j in range(8, 16):
         fixed_attrs[j, (j - 8) % k] = AttributeTokens.YES
+    probe = Probe.load(args.probe) if args.control_every and master and Path(args.probe).exists() else None
+    watch = [n for n in ("Goatee", "Sideburns", "Beard", "Male", "Eyeglasses") if n in attr_names]
+    ctl_noise = torch.randn(64, 1024, 16, 16, generator=torch.Generator().manual_seed(11)).to(dev)
+
+    def control_rates() -> dict:
+        """How often the probe finds each watched attribute when it alone is requested (EMA student, 64 samples)."""
+        rates = {}
+        for name in ["uncond", *watch]:
+            a = torch.zeros(len(ctl_noise), k, dtype=torch.long, device=dev)
+            if name != "uncond":
+                a[:, attr_names.index(name)] = AttributeTokens.YES
+            with torch.no_grad(), prec.autocast():
+                z = ema(ctl_noise, t_one(len(ctl_noise)), a)[0].float()
+            p = probe.probs(z.mean(dim=(-2, -1))) > 0.5
+            col = attr_names.index("Male" if name == "uncond" else name)
+            key = "ctl_uncond_Male" if name == "uncond" else f"ctl_{name}"
+            rates[key] = round(float(p[:, col].float().mean()), 3)
+        return rates
+
     log = open(out / "metrics.jsonl", "a") if master else None  # noqa: SIM115
     t_start, step = time.perf_counter(), 0
     print(
@@ -238,23 +277,34 @@ def run(args: argparse.Namespace) -> None:
             loss.backward()
             info["loss"] = loss.detach()
         else:
-            real_attrs = drop_attributes(real_attrs.to(dev), 0.1, 0.3)
-            fake_attrs = drop_attributes(cond, 0.1, 0.3)
-            z = torch.randn(len(fake_attrs), 1024, 16, 16, device=dev)
-            with prec.autocast():  # D step
-                with torch.no_grad():
+            loss = torch.zeros((), device=dev)
+            if adversarial:
+                real_attrs = drop_attributes(real_attrs.to(dev), 0.1, 0.3)
+                fake_attrs = drop_attributes(cond, 0.1, 0.3)
+                z = torch.randn(len(fake_attrs), 1024, 16, 16, device=dev)
+                with prec.autocast():  # D step
+                    with torch.no_grad():
+                        fake = student(z, t_one(len(z)), fake_attrs)[0].float()
+                    ld, info = d_loss(
+                        disc,
+                        real,
+                        real_attrs,
+                        fake,
+                        fake_attrs,
+                        transport,
+                        args.r1_weight,
+                        args.r1_sigma,
+                        args.d_mismatch,
+                    )
+                opt_d.zero_grad(set_to_none=True)
+                ld.backward()
+                average_gradients(list(disc.trainable_parameters()), dev)
+                opt_d.step()
+                with prec.autocast():  # G step
                     fake = student(z, t_one(len(z)), fake_attrs)[0].float()
-                ld, info = d_loss(
-                    disc, real, real_attrs, fake, fake_attrs, transport, args.r1_weight, args.r1_sigma
-                )
-            opt_d.zero_grad(set_to_none=True)
-            ld.backward()
-            average_gradients(list(disc.trainable_parameters()), dev)
-            opt_d.step()
-            with prec.autocast():  # G step
-                fake = student(z, t_one(len(z)), fake_attrs)[0].float()
-                lg = g_loss(disc, fake, fake_attrs, transport)
-            loss = lg
+                    lg = g_loss(disc, fake, fake_attrs, transport)
+                loss = args.adv_weight * lg
+                info.update(loss_d=ld.detach(), loss_g=lg.detach())
             if pairs is not None:
                 j = torch.from_numpy(rng.integers(len(pairs[0]), size=share(args.anchor_batch)))
                 pz, pa_, px_ = (pairs[0][j].to(dev).float(), pairs[1][j].to(dev), pairs[2][j].to(dev).float())
@@ -262,11 +312,10 @@ def run(args: argparse.Namespace) -> None:
                     pred = student(pz, t_one(len(pz)), pa_)[0].float()
                 mse = (pred - px_).pow(2).mean(dim=(1, 2, 3))
                 la = (torch.sqrt(mse + args.anchor_c**2) - args.anchor_c).mean()
-                loss = lg + args.anchor_weight * la
+                loss = loss + args.anchor_weight * la
                 info["loss_anchor"] = la.detach()
             opt_g.zero_grad(set_to_none=True)
             loss.backward()
-            info.update(loss_d=ld.detach(), loss_g=lg.detach())
         average_gradients(list(student.parameters()), dev)
         gn = torch.nn.utils.clip_grad_norm_(student.parameters(), 1.0)
         opt_g.step()
@@ -285,7 +334,7 @@ def run(args: argparse.Namespace) -> None:
                 continue
             log.write(json.dumps(rec) + "\n")
             log.flush()
-            main_loss = rec.get("loss", rec.get("loss_g"))
+            main_loss = rec.get("loss", rec.get("loss_g", rec.get("loss_anchor")))
             mem = f" peak {torch.cuda.max_memory_allocated() / 2**30:.1f} GiB" if dev.type == "cuda" else ""
             print(
                 f"[{args.method}] step {step} {rec['minutes']} min loss {main_loss:.4f} gnorm {float(gn):.2f}{mem}",
@@ -293,6 +342,11 @@ def run(args: argparse.Namespace) -> None:
             )
             if not math.isfinite(main_loss):
                 raise FloatingPointError("non-finite loss")
+        if probe is not None and step % args.control_every == 0:
+            ctl = {"step": step, **control_rates()}
+            log.write(json.dumps(ctl) + "\n")
+            log.flush()
+            print(f"[{args.method}] control at step {step}: {ctl}", flush=True)
         if step % args.sample_every == 0 and master:
             with torch.no_grad(), prec.autocast():
                 zs = ema(fixed_noise, t_one(16), fixed_attrs)[0].float()
@@ -315,6 +369,9 @@ def run(args: argparse.Namespace) -> None:
                 "method": args.method,
                 "steps": step,
                 "anchor_pairs": args.anchor_pairs,
+                "adv_weight": args.adv_weight,
+                "d_attr_heads": args.d_attr_heads,
+                "d_mismatch": args.d_mismatch,
                 "minutes": round((time.perf_counter() - t_start) / 60, 2),
                 "batch": bsz,
                 "replicas": n_rep,
