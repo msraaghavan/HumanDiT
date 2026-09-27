@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HumanDiT: faces of people who don't exist</title>
+  <meta name="description" content="An AI that invents realistic faces of people who don't exist, with the features you choose. Every picture carries an invisible watermark. A research project with every number measured.">
+  <meta name="theme-color" content="#05060b">
+  <meta name="color-scheme" content="dark">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="HumanDiT: faces of people who don't exist">
+  <meta property="og:description" content="An AI that invents realistic faces from scratch. Try it live: choose features, watch it draw, blend two people, check the hidden watermark.">
+  <meta property="og:image" content="assets/og.jpg">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..900&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="css/site.css">
+  <link rel="preload" href="assets/site.json" as="fetch" crossorigin>
+  <script src="config.js"></script>
+  <script type="module" src="js/main.js"></script>
+</head>
+<body>
+  <a class="skip" href="#studio">Skip to making faces</a>
+  <div class="intro" aria-hidden="true"><canvas></canvas><span class="intro-word">HumanDiT</span></div>
+  <div class="grain" aria-hidden="true"><i></i></div>
+
+  <header class="nav">
+    <a class="brand" href="#top" aria-label="HumanDiT, back to the top"><span class="brand-mark" aria-hidden="true"></span>HumanDiT</a>
+    <nav class="nav-links" aria-label="Sections">
+      <a href="#how">How it works</a>
+      <a href="#studio">Make faces</a>
+      <a href="#edit">Change one thing</a>
+      <a href="#blend">Blend</a>
+      <a href="#speed">Speed</a>
+      <a href="#check">AI check</a>
+      <a href="#numbers">The numbers</a>
+    </nav>
+    <div class="engine" role="status" aria-live="polite" data-state="idle">
+      <span class="engine-dot" aria-hidden="true"></span><span class="engine-text">Engine: connecting</span>
+    </div>
+    <span class="nav-progress" aria-hidden="true"><i></i></span>
+  </header>
+
+  <main>
+    <!-- ============================================================ hero -->
+    <section class="hero" id="top">
+      <div class="wall" aria-hidden="true"></div>
+      <div class="hero-grid">
+        <div class="hero-copy">
+          <p class="eyebrow" data-reveal><span class="pulse" aria-hidden="true"></span>A generative AI research project</p>
+          <h1 class="display" data-split>Faces of people <span class="neon">who don't exist.</span></h1>
+          <p class="lede" data-reveal style="--d:.5s">This AI invents realistic faces from scratch. <strong>None of these people are real.</strong>
+            Choose the features you want and it draws new people in about a second. Every picture carries an invisible
+            watermark, so it can always be identified as AI-made.</p>
+          <div class="cta" data-reveal style="--d:.62s">
+            <a class="btn btn-primary" href="#studio" data-magnetic><span>Make a face</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a>
+            <button class="btn btn-ghost" type="button" data-reel data-magnetic><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg><span>Watch the 15-second reel</span></button>
+          </div>
+          <dl class="stats" data-reveal style="--d:.74s"></dl>
+        </div>
+        <figure class="portrait" data-reveal style="--d:.3s">
+          <div class="portrait-frame">
+            <canvas class="portrait-canvas" width="512" height="512" aria-label="A face being drawn by the AI, from static to a finished face, then another"></canvas>
+            <span class="corner tl"></span><span class="corner tr"></span><span class="corner bl"></span><span class="corner br"></span>
+            <div class="scanline" aria-hidden="true"></div>
+          </div>
+          <figcaption class="hud">
+            <span class="hud-step">Step <b>01</b> / 25</span>
+            <span class="hud-meter" aria-hidden="true"><i></i></span>
+            <span class="hud-noise">Static left <b>100%</b></span>
+          </figcaption>
+          <p class="portrait-note">Live replay of the AI's real drafts. Nobody in them exists.</p>
+        </figure>
+      </div>
+      <a class="scroll-cue" href="#how" aria-label="Scroll to how it works"><span></span></a>
+    </section>
+
+    <!-- ============================================================ ticker -->
+    <div class="ticker" aria-hidden="true"><div class="ticker-track"></div></div>
+
+    <!-- ============================================================ how it works (scroll-driven) -->
+    <section class="how" id="how">
+      <div class="how-sticky">
+        <div class="how-grid">
+          <div class="how-copy">
+            <p class="kicker">How it works</p>
+            <h2 class="h2" data-split>From static to a face in 25 small steps</h2>
+            <ol class="how-steps">
+              <li data-step="0"><b>Random static</b><span>Every face starts as pure noise, like an untuned TV.</span></li>
+              <li data-step="1"><b>Cleaning up</b><span>The AI removes a little of the noise, 25 times. Scroll to watch each draft.</span></li>
+              <li data-step="2"><b>A new face</b><span>Someone who has never existed. Not a copy: 0 of 10,000 checked faces matched a real photo.</span></li>
+              <li data-step="3"><b>Your choices</b><span>Ask for glasses, a smile, grey hair, bangs. A second AI checks each one.</span></li>
+            </ol>
+          </div>
+          <div class="how-stage">
+            <div class="how-frame">
+              <canvas class="how-canvas" width="640" height="640" aria-label="The drawing process, controlled by scrolling"></canvas>
+              <figure class="how-guess" aria-hidden="true"><canvas width="160" height="160"></canvas><figcaption>The AI's guess</figcaption></figure>
+              <span class="corner tl"></span><span class="corner tr"></span><span class="corner bl"></span><span class="corner br"></span>
+              <div class="how-tags" aria-hidden="true"></div>
+            </div>
+            <div class="how-hud">
+              <span class="how-count">Step <b>00</b> / 25</span>
+              <span class="how-rail" aria-hidden="true"><i></i></span>
+              <span class="how-label">pure noise</span>
+              <span class="how-left">static <b>100%</b></span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================ 01 make faces -->
+    <section class="section studio" id="studio">
+      <header class="section-head" data-reveal-head>
+        <p class="kicker"><span class="num">01</span>Make faces</p>
+        <h2 class="h2" data-split>Invent someone new</h2>
+        <p class="section-lede" data-reveal>Pick what each face must have, or must not have, and press the button. Each press invents new people. Under each face, a second AI (the <em>checker</em>) confirms what came out as asked.</p>
+      </header>
+      <div class="studio-grid">
+        <form class="panel controls" data-reveal onsubmit="return false">
+          <fieldset class="field">
+            <legend>Speed or quality</legend>
+            <div class="seg" data-name="quality" role="radiogroup">
+              <button type="button" role="radio" aria-checked="true" data-value="instant"><b>Instant</b><small>under a second</small></button>
+              <button type="button" role="radio" aria-checked="false" data-value="best"><b>Best quality</b><small>a few seconds</small></button>
+              <i class="seg-pill" aria-hidden="true"></i>
+            </div>
+          </fieldset>
+          <fieldset class="field">
+            <legend>How many faces</legend>
+            <div class="seg seg-count" data-name="count" role="radiogroup">
+              <button type="button" role="radio" aria-checked="false" data-value="1">1</button>
+              <button type="button" role="radio" aria-checked="false" data-value="2">2</button>
+              <button type="button" role="radio" aria-checked="true" data-value="4">4</button>
+              <button type="button" role="radio" aria-checked="false" data-value="8">8</button>
+              <i class="seg-pill" aria-hidden="true"></i>
+            </div>
+          </fieldset>
+          <fieldset class="field">
+            <legend>Features <span class="legend-hint"><i class="k k-yes"></i>must have <i class="k k-no"></i>must not</span></legend>
+            <div class="chips" role="group" aria-label="Features: press once for must have, twice for must not, three times to clear"></div>
+          </fieldset>
+          <button class="btn btn-primary btn-wide btn-make" type="button" data-magnetic><span>Make faces</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l1.9 5.6L19.5 10l-5.6 1.9L12 17.5l-1.9-5.6L4.5 10l5.6-1.4z"/></svg></button>
+          <p class="note weak-note" hidden></p>
+        </form>
+        <div class="results">
+          <div class="results-head">
+            <p class="results-status" aria-live="polite"></p>
+            <span class="results-tag"></span>
+          </div>
+          <div class="faces" data-count="8"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================ 02 change one thing -->
+    <section class="section edit" id="edit">
+      <header class="section-head" data-reveal-head>
+        <p class="kicker"><span class="num">02</span>Change one thing</p>
+        <h2 class="h2" data-split>Same person. One change.</h2>
+        <p class="section-lede" data-reveal>The same invented person, drawn twice from the same starting static: once without a feature and once with it. Drag the line to compare.</p>
+      </header>
+      <div class="edit-grid">
+        <div class="compare" data-reveal tabindex="0" role="slider" aria-label="Compare without and with the feature" aria-valuemin="0" aria-valuemax="100" aria-valuenow="50">
+          <img class="compare-a" alt="">
+          <div class="compare-b-wrap"><img class="compare-b" alt=""></div>
+          <div class="compare-line" aria-hidden="true"><span class="compare-knob"></span></div>
+          <span class="compare-lbl l">Without</span><span class="compare-lbl r">With</span>
+        </div>
+        <div class="panel edit-side" data-reveal>
+          <p class="field-title">Feature</p>
+          <div class="pills edit-pills" role="radiogroup" aria-label="Feature to change"></div>
+          <div class="checker">
+            <p class="field-title">The checker's reading</p>
+            <div class="meter-row"><span>Without</span><span class="meter"><i class="m-without"></i></span><b class="v-without">-</b></div>
+            <div class="meter-row"><span>With</span><span class="meter"><i class="m-with"></i></span><b class="v-with">-</b></div>
+            <p class="small">How sure the checker is that the feature is there.</p>
+          </div>
+          <button class="btn btn-ghost btn-wide btn-edit" type="button">Try another person</button>
+          <p class="small edit-status" aria-live="polite"></p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================ 03 blend -->
+    <section class="section blend" id="blend">
+      <header class="section-head" data-reveal-head>
+        <p class="kicker"><span class="num">03</span>Blend two faces</p>
+        <h2 class="h2" data-split>One person becomes another</h2>
+        <p class="section-lede" data-reveal>The AI moves smoothly between the starting static of two people. Every in-between face is a new, complete person. Drag to scrub.</p>
+      </header>
+      <div class="blend-grid" data-reveal>
+        <div class="blend-stage">
+          <canvas class="blend-canvas" width="512" height="512" aria-label="A face morphing from one invented person into another"></canvas>
+          <span class="corner tl"></span><span class="corner tr"></span><span class="corner bl"></span><span class="corner br"></span>
+        </div>
+        <div class="blend-controls">
+          <div class="blend-ends"><canvas class="blend-a" width="96" height="96" aria-hidden="true"></canvas><span>Person A</span><span class="blend-mid"></span><span>Person B</span><canvas class="blend-b" width="96" height="96" aria-hidden="true"></canvas></div>
+          <input class="range blend-range" type="range" min="0" max="1000" value="0" aria-label="Blend from person A to person B">
+          <div class="blend-actions">
+            <button class="btn btn-ghost btn-blend" type="button">Blend two new people</button>
+            <p class="small blend-status" aria-live="polite"></p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================ 04 speed -->
+    <section class="section speed" id="speed">
+      <header class="section-head" data-reveal-head>
+        <p class="kicker"><span class="num">04</span>Instant or best</p>
+        <h2 class="h2" data-split>One step, or twenty-five?</h2>
+        <p class="section-lede" data-reveal>The same starting static, drawn four ways. Instant mode is a second AI trained to jump straight to the answer. Best quality takes more clean-up steps: slower, but closer to a real photo.</p>
+      </header>
+      <div class="race panel" data-reveal>
+        <div class="race-head"><span>Time to draw, replayed at real speed</span><span class="race-hw"></span></div>
+        <div class="lanes"></div>
+        <div class="race-foot">
+          <p class="small">Realism gap: how far the faces are from real photos, measured on 50,000 faces (FID, lower is better).</p>
+          <button class="btn btn-ghost btn-race" type="button">Race again, live</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================ 05 is it AI-made? -->
+    <section class="section check" id="check">
+      <header class="section-head" data-reveal-head>
+        <p class="kicker"><span class="num">05</span>Is it AI-made?</p>
+        <h2 class="h2" data-split>A signature you can't see</h2>
+        <p class="section-lede" data-reveal>Every face this site makes carries an invisible watermark. It survives resizing and compression. Drop any picture here, or try the two examples.</p>
+      </header>
+      <div class="check-grid">
+        <label class="drop" data-reveal>
+          <input class="drop-input" type="file" accept="image/*">
+          <img class="drop-img" alt="" hidden>
+          <span class="drop-empty"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4M6 10l6-6 6 6M4 20h16"/></svg><b>Drop a picture</b><span>or press to choose one</span></span>
+          <span class="scan" aria-hidden="true"><i></i></span>
+          <span class="stamp" aria-hidden="true"></span>
+        </label>
+        <div class="panel check-side" data-reveal>
+          <p class="field-title">Examples</p>
+          <div class="examples">
+            <button type="button" class="example" data-src="assets/examples/humandit_face.png"><img src="assets/examples/humandit_face.png" alt="A face made by HumanDiT"><span>Made by HumanDiT</span></button>
+            <button type="button" class="example" data-src="assets/examples/old_project_face.png"><img src="assets/examples/old_project_face.png" alt="A face from this project's first version"><span>This project's first version</span></button>
+          </div>
+          <div class="verdict" aria-live="polite"><p class="verdict-title">Waiting for a picture</p><p class="small verdict-body">The answer appears here.</p></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================ 06 the numbers -->
+    <section class="section numbers" id="numbers">
+      <header class="section-head" data-reveal-head>
+        <p class="kicker"><span class="num">06</span>For engineers</p>
+        <h2 class="h2" data-split>What's under the hood</h2>
+        <p class="section-lede" data-reveal>A 183-million-parameter diffusion transformer that draws in the feature space of a frozen vision model, distilled into a one-step generator. Every number below is measured.</p>
+      </header>
+      <div class="arch panel" data-reveal>
+        <svg class="arch-svg" viewBox="0 0 1100 250" role="img" aria-label="Pipeline: noise, then the teacher (25 steps) or the one-step student, then the decoder, then the watermark, with a checker reading the result">
+          <defs>
+            <linearGradient id="gline" gradientUnits="userSpaceOnUse" x1="150" y1="0" x2="830" y2="0"><stop offset="0" stop-color="#00e5ff"/><stop offset=".55" stop-color="#7c5cff"/><stop offset="1" stop-color="#ff3df0"/></linearGradient>
+            <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#7c5cff"/></marker>
+          </defs>
+          <g class="arch-lines" fill="none" stroke="url(#gline)" stroke-width="2" marker-end="url(#arrow)">
+            <path pathLength="1" d="M150 125 C190 125 200 70 240 70"/>
+            <path pathLength="1" d="M150 125 C190 125 200 180 240 180"/>
+            <path pathLength="1" d="M450 70 C490 70 500 125 540 125"/>
+            <path pathLength="1" d="M450 180 C490 180 500 125 540 125"/>
+            <path pathLength="1" d="M750 125 L830 125"/>
+            <path pathLength="1" d="M645 160 L645 212"/>
+          </g>
+          <g class="arch-nodes">
+            <g transform="translate(20 95)"><rect width="130" height="60" rx="10"/><text x="65" y="27">Noise</text><text class="sub" x="65" y="45">1024 × 16 × 16</text></g>
+            <g transform="translate(240 40)"><rect width="210" height="60" rx="10"/><text x="105" y="27">Teacher DiT^DH-B</text><text class="sub" x="105" y="45">25 ODE steps · 183M</text></g>
+            <g transform="translate(240 150)"><rect width="210" height="60" rx="10"/><text x="105" y="27">One-step student</text><text class="sub" x="105" y="45">GAN-distilled · 1 step</text></g>
+            <g transform="translate(540 90)"><rect width="210" height="70" rx="10"/><text x="105" y="30">RAEv2 decoder</text><text class="sub" x="105" y="50">DINOv3 latents → pixels</text></g>
+            <g transform="translate(830 95)"><rect width="250" height="60" rx="10"/><text x="125" y="27">TrustMark watermark</text><text class="sub" x="125" y="45">invisible, 256 × 256 face</text></g>
+            <g transform="translate(540 212)"><rect class="ghost" width="210" height="34" rx="8"/><text class="sub" x="105" y="22">DINOv3 probe checks 12 features</text></g>
+          </g>
+        </svg>
+      </div>
+      <div class="numbers-grid">
+        <div class="panel score" data-reveal>
+          <h3 class="h3">Realism gap of every model, measured</h3>
+          <p class="small">FID (clean) against FFHQ-256 on 50,000 faces each, log scale, lower is better. Cyan to pink: what this site runs. Green: the best.</p>
+          <div class="score-rows"></div>
+        </div>
+        <div class="panel facts" data-reveal>
+          <h3 class="h3">Measured, not claimed</h3>
+          <dl class="fact-list"></dl>
+          <div class="links" hidden>
+            <a class="link" data-link="github" href="#" hidden>Code and write-up</a>
+            <a class="link" data-link="model" href="#" hidden>Model card and weights</a>
+            <a class="link" data-link="space" href="#" hidden>Engine on Hugging Face</a>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="footer-inner">
+      <p class="footer-big" data-split>Nobody here exists.</p>
+      <p class="small">Every face on this site is invented by an AI; none of them are real people. For research and education only, not for commercial use. Trained on FFHQ (CC BY-NC-SA 4.0) with RAEv2 (CC BY-NC 4.0) and DINOv3 (DINOv3 License) components. Live results run on Hugging Face ZeroGPU; results shown before the engine answers were made earlier by the same AI and are labelled.</p>
+      <p class="small footer-meta">HumanDiT · M S Raaghavan · 2026</p>
+    </div>
+  </footer>
+
+  <dialog class="reel">
+    <div class="reel-box">
+      <video class="reel-video" src="assets/reel.mp4" poster="assets/reel_poster.jpg" playsinline controls preload="none"></video>
+      <button class="reel-close" type="button" aria-label="Close the reel"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    </div>
+  </dialog>
+  <div class="toast" role="alert" hidden></div>
+</body>
+</html>

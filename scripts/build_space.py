@@ -1,15 +1,16 @@
-"""Assemble the Hugging Face upload folders: the demo Space and the model repo it downloads its weights from.
+"""Assemble the Hugging Face upload folders: the engine Space and the model repo it downloads its weights from.
 
-    uv run python scripts/build_space.py --model-repo USER/HumanDiT --github https://github.com/USER/REPO
+    uv run python scripts/build_space.py --model-repo USER/HumanDiT --site-url https://humandit.pages.dev
 
-Writes dist/model (weights, probe, measured results, model card) and dist/space (the Gradio app, the humangen
-package, the page's assets, requirements and a Space card). Nothing is uploaded: that is a separate, deliberate step,
+Writes dist/model (weights, probe, measured results, model card) and dist/space (app/api.py, the JSON engine the
+website calls, with the humangen package, requirements and a Space card). The website itself is static and deployed
+separately (scripts/site/build_site.py). Nothing is uploaded: that is a separate, deliberate step,
 
     hf upload USER/HumanDiT dist/model . --repo-type model
-    hf upload USER/HumanDiT-demo dist/space . --repo-type space --exclude "**/__pycache__/*"
+    hf upload USER/HumanDiT-engine dist/space . --repo-type space --exclude "**/__pycache__/*"
 
-(the exclude matters if the Space folder was test-run locally), after which the Space's hardware is set to ZeroGPU in its settings. Large files are hard-linked when possible, so the
-1.5 GB of weights are not copied twice on disk.
+(the exclude matters if the Space folder was test-run locally), after which the Space's hardware is set to ZeroGPU.
+Large files are hard-linked when possible, so the 1.4 GB of weights are not copied twice on disk.
 """
 
 from __future__ import annotations
@@ -30,7 +31,7 @@ WEIGHTS = {  # model-repo path -> local path (directory names are kept: the demo
 }
 EVAL_DIRS = ("runs/eval", "runs/eval_extra", "runs/eval_local")
 EVAL_EXTRA = ("teacher_tuned_nearest_pairs.png",)  # the memorisation audit image shown in the engineers' tab
-SPACE_ASSETS = ("showreel_poster.jpg", "web", "examples")  # the page plays web/reel.mp4, not the 1080p master
+APP_FILES = ("api.py", "gradio_app.py", "watermark.py")  # api.py reuses gradio_app's engine
 
 
 def put(src: Path, dst: Path) -> None:
@@ -138,27 +139,22 @@ def build_model(out: Path, github: str | None) -> None:
     )
 
 
-def build_space(out: Path, model_repo: str, github: str | None) -> None:
+def build_space(out: Path, model_repo: str, github: str | None, site_url: str | None) -> None:
     put_tree(ROOT / "src" / "humangen", out / "src" / "humangen")
-    for f in ("gradio_app.py", "watermark.py"):
+    for f in APP_FILES:
         put(ROOT / "app" / f, out / "app" / f)
-    put_tree(ROOT / "app" / "web", out / "app" / "web")
-    for name in SPACE_ASSETS:
-        src = ROOT / "docs" / "assets" / name
-        put_tree(src, out / "docs" / "assets" / name) if src.is_dir() else put(
-            src, out / "docs" / "assets" / name
-        )
-    (out / "app.py").write_text(
-        (ROOT / "space" / "app.py").read_text(encoding="utf-8").replace("__MODEL_REPO__", model_repo),
-        encoding="utf-8",
-    )
+    put_tree(ROOT / "app" / "web", out / "app" / "web")  # gradio_app reads its stylesheet when imported
+    app = (ROOT / "space" / "app.py").read_text(encoding="utf-8").replace("__MODEL_REPO__", model_repo)
+    if site_url:
+        app = app.replace("__SITE_URL__", site_url)
+    (out / "app.py").write_text(app, encoding="utf-8")
     put(ROOT / "space" / "requirements.txt", out / "requirements.txt")
     put(ROOT / "LICENSE", out / "LICENSE")
     import gradio
 
     meta = front_matter(
         {
-            "title": "HumanDiT",
+            "title": "HumanDiT engine",
             "colorFrom": "blue",
             "colorTo": "pink",
             "sdk": "gradio",
@@ -167,15 +163,20 @@ def build_space(out: Path, model_repo: str, github: str | None) -> None:
             "app_file": "app.py",
             "pinned": False,
             "license": "other",
-            "short_description": "An AI that invents faces of people who don't exist",
+            "short_description": "The GPU engine behind the HumanDiT face-generation website",
             "models": [model_repo],
         }
     )
     code = f" Code and full write-up: {github}." if github else ""
+    site = f"**The website: {site_url}**\n\n" if site_url else ""
     (out / "README.md").write_text(
-        meta + "# HumanDiT: faces of people who don't exist\n\n"
-        "An AI that invents realistic faces from scratch, with features you choose. Every picture carries an "
-        "invisible watermark. Runs on ZeroGPU: a GPU is attached only while your faces are being made."
+        meta
+        + "# HumanDiT engine\n\n"
+        + site
+        + "This Space runs the models behind HumanDiT, an AI that invents "
+        "realistic faces of people who don't exist, with features you choose. It serves JSON endpoints "
+        "(`/make`, `/edit`, `/blend`, `/draw`, `/compare`, `/check`) that the website calls; every picture carries "
+        "an invisible watermark. Runs on ZeroGPU: a GPU is attached only while a job runs."
         f"{code}\n\nWeights and measured results: https://huggingface.co/{model_repo}. Non-commercial use only.\n",
         encoding="utf-8",
     )
@@ -187,13 +188,16 @@ def main() -> None:
         "--model-repo", required=True, help="USER/NAME of the model repo the Space downloads from"
     )
     ap.add_argument("--github", help="https://github.com/USER/REPO, for links in the cards")
+    ap.add_argument(
+        "--site-url", help="where the website is deployed (Cloudflare Pages), for the Space's page"
+    )
     ap.add_argument("--out", default="dist")
     a = ap.parse_args()
     out = ROOT / a.out
     for sub in ("model", "space"):
         shutil.rmtree(out / sub, ignore_errors=True)
     build_model(out / "model", a.github)
-    build_space(out / "space", a.model_repo, a.github)
+    build_space(out / "space", a.model_repo, a.github, a.site_url)
     for sub in ("model", "space"):
         files = [f for f in (out / sub).rglob("*") if f.is_file()]
         mb = sum(f.stat().st_size for f in files) / 2**20
