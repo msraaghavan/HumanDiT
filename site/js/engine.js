@@ -31,8 +31,9 @@ export const onStatus = (f) => (listeners.add(f), () => listeners.delete(f));
 /** Connect (and wake the Space if it sleeps). Resolves to the engine's /ping answer; rejects if unreachable. */
 export function connect() {
   if (!target || target.includes("__SPACE__")) {
-    set("offline", "Engine not configured");
-    return Promise.reject(new Error("No engine is configured for this page."));
+    // a copy of the site deployed before its engine: everything shown is the AI's saved work, said plainly
+    set("saved", "Showing saved results");
+    return Promise.reject(new Error("NOT_LIVE"));
   }
   if (connecting) return connecting;
   set("connecting", "Engine: connecting");
@@ -74,7 +75,11 @@ async function run(name, payload, onQueue) {
 
 /** Call an endpoint: {onQueue(position)} reports a place in line. Errors come back in plain words. */
 export async function call(name, payload, { onQueue } = {}) {
-  await connect();
+  try {
+    await connect();
+  } catch (err) {
+    throw new Error(plain(err));
+  }
   running++;
   set("busy", "Engine: working");
   try {
@@ -89,6 +94,8 @@ export async function call(name, payload, { onQueue } = {}) {
 
 export function plain(err) {
   const m = String(err?.message || err || "");
+  if (m === "NOT_LIVE")
+    return "Live mode is not switched on for this copy of the site yet, so it shows results the AI made earlier.";
   if (/quota/i.test(m)) {
     const wait = m.match(/(\d+:\d{2}:\d{2})/);
     return (

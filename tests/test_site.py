@@ -55,7 +55,10 @@ def test_cloudflare_build(tmp_path):
     )
     cfg = (out / "config.js").read_text(encoding="utf-8")
     assert 'space: "someone/HumanDiT-engine"' in cfg and "__SPACE__" not in cfg
+    assert 'local: ""' in cfg
     assert "https://huggingface.co/someone/HumanDiT" in cfg
+    assert json.loads((out / "wrangler.jsonc").read_text())["name"] == "humandit"
+    assert "wrangler.jsonc" in (out / ".assetsignore").read_text()
     headers = (out / "_headers").read_text(encoding="utf-8")
     assert "script-src 'self';" in headers and "unsafe-eval" not in headers
     assert "connect-src 'self' https://huggingface.co https://*.hf.space" in headers

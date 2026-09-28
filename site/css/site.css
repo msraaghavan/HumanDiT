@@ -442,6 +442,11 @@ html:not(.js) .intro,
   box-shadow: 0 0 10px var(--cyan);
 }
 
+.engine[data-state="saved"] .engine-dot {
+  background: var(--violet);
+  box-shadow: 0 0 10px rgba(124, 92, 255, 0.8);
+}
+
 .engine[data-state="offline"] .engine-dot {
   background: var(--red);
   color: var(--red);

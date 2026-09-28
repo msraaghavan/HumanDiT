@@ -23,6 +23,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8081)
     ap.add_argument("--engine", default="http://localhost:7861")
+    ap.add_argument("--dir", default="site", help="the folder to serve: site/, or a build such as dist/site")
     a = ap.parse_args()
     ws = a.engine.replace("http", "ws", 1)
     csp = CSP.replace("connect-src 'self'", f"connect-src 'self' {a.engine} {ws}").replace(
@@ -39,7 +40,7 @@ def main() -> None:
         def log_message(self, *_):
             pass
 
-    site = HERE.parents[1] / "site"
+    site = HERE.parents[1] / a.dir
     server = ThreadingHTTPServer(("127.0.0.1", a.port), functools.partial(Handler, directory=str(site)))
     print(f"serving {site} with the production CSP on http://localhost:{a.port}/", flush=True)
     server.serve_forever()

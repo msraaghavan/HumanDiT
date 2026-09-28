@@ -152,6 +152,12 @@ def main() -> None:
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, dst)
 
+    check = {}  # the engine's verdict on each watermark example, shown if the engine can't be reached
+    for name in ("humandit_face.png", "old_project_face.png"):
+        uri = "data:image/png;base64," + base64.b64encode((OUT / "examples" / name).read_bytes()).decode()
+        check[f"assets/examples/{name}"] = c.predict(image=uri, api_name="/check")["found"]
+    print("check:", check)
+
     ev = evals()
     rows = [
         {"name": name, "tech": tech, "use": use, "fid": round(ev[k]["fid_clean"], 3), "n": ev[k]["n"]}
@@ -193,6 +199,7 @@ def main() -> None:
             "edits": edits,
             "blend": blend,
             "compare": compare,
+            "check": check,
         },
     }
     (OUT / "site.json").write_text(json.dumps(site, separators=(",", ":")))

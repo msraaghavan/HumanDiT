@@ -936,7 +936,20 @@ function checker() {
     return c.toDataURL("image/jpeg", 0.95);
   };
 
-  const check = async (blob) => {
+  // saved: the engine's earlier verdict on each example, shown (and labelled) when the engine can't answer now
+  const saved = SITE.preset.check || {};
+  const show = (found, note) => {
+    stamp.textContent = found ? "AI-made · HumanDiT" : "No watermark";
+    stamp.classList.add(found ? "yes" : "no", "show");
+    verdict.classList.add(found ? "yes" : "no");
+    title.textContent = found ? "Yes: this picture carries the HumanDiT watermark." : "No HumanDiT watermark found.";
+    body.textContent =
+      (found
+        ? "It was made by this AI. The mark is invisible and survives resizing and compression."
+        : "This picture was not made here, or it was heavily altered.") + (note ? ` ${note}` : "");
+  };
+
+  const check = async (blob, example) => {
     if (busy) return;
     if (!blob.type.startsWith("image/")) return toast("That file is not a picture.");
     busy = true;
@@ -954,16 +967,15 @@ function checker() {
     try {
       const r = await engine.call("check", { image: url });
       await new Promise((res) => setTimeout(res, Math.max(0, 1100 - (performance.now() - t0))));
-      stamp.textContent = r.found ? "AI-made · HumanDiT" : "No watermark";
-      stamp.classList.add(r.found ? "yes" : "no", "show");
-      verdict.classList.add(r.found ? "yes" : "no");
-      title.textContent = r.found ? "Yes: this picture carries the HumanDiT watermark." : "No HumanDiT watermark found.";
-      body.textContent = r.found
-        ? "It was made by this AI. The mark is invisible and survives resizing and compression."
-        : "This picture was not made here, or it was heavily altered.";
+      show(r.found);
     } catch (err) {
-      title.textContent = "Couldn't check this picture right now.";
-      body.textContent = err.message;
+      if (example in saved) {
+        await new Promise((res) => setTimeout(res, Math.max(0, 1100 - (performance.now() - t0))));
+        show(saved[example], "(The engine checked this example earlier; it can't be reached right now.)");
+      } else {
+        title.textContent = "Couldn't check this picture right now.";
+        body.textContent = err.message;
+      }
     } finally {
       drop.classList.remove("scanning");
       busy = false;
@@ -986,7 +998,7 @@ function checker() {
   $$(".example").forEach((b) =>
     b.addEventListener("click", async () => {
       const blob = await (await fetch(b.dataset.src)).blob();
-      check(blob);
+      check(blob, b.dataset.src);
     }),
   );
 }
