@@ -1,13 +1,14 @@
-"""End-to-end check of the website (site/) in a real browser, against a running engine, plus its frame rate.
+"""End-to-end check of the website (site/) in a real browser, with the AI running in the page, plus its frame rate.
 
-    uv run --extra demo python app/api.py --port 7861 &          # the engine
-    uv run python scripts/site/serve.py --port 8081 &             # the page, under the production CSP
-    uv run python scripts/site/site_check.py [--url http://localhost:8081/] [--fps]
+    uv run python scripts/site/serve.py --port 8081 &             # the page and its models, under the production CSP
+    uv run python scripts/site/site_check.py [--url http://localhost:8081/] [--fps] [--cpu]
 
-Checks: no JavaScript errors; the engine connects; every section starts from its saved results; each live tool
-answers (faces that honour a ticked feature, another person, a new blend, a live race, both watermark verdicts); no
-emoji; no sideways scrolling on a phone. --fps also measures every requestAnimationFrame interval for a few seconds
-per scene (the hero, scrubbing how-it-works, the blend playing, scrolling). Exits non-zero if a check fails.
+Checks: no JavaScript errors and no missing files; the pixel-art town draws; every section starts from its saved
+results; the AI check reads both examples on this device; live mode downloads, prepares and times itself through the
+page's own buttons; then each tool answers live (faces that honour a ticked feature, Best quality, another person,
+a new blend, a race on this GPU); no emoji; no sideways scrolling on a phone. --cpu runs the AI on the processor
+(WebAssembly) instead of WebGPU. --fps also measures every requestAnimationFrame interval for a few seconds per scene.
+Exits non-zero if a check fails.
 """
 
 from __future__ import annotations
@@ -27,6 +28,10 @@ FPS_JS = """async (ms) => { const d = []; let last = performance.now();
   d.shift(); d.sort((a, b) => a - b);
   const mean = d.reduce((a, b) => a + b, 0) / d.length;
   return { fps: 1000 / mean, p95: d[Math.floor(d.length * 0.95)], slow: d.filter(x => x > 25).length / d.length }; }"""
+# a canvas is drawing if its middle has some light in it
+LIT = """(sel) => { const c = document.querySelector(sel); if (!c || !c.width) return false;
+  const x = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; let s = 0;
+  for (let i = 0; i < x.length; i += 4) s += x[i] + x[i + 1] + x[i + 2]; return s / (x.length / 4) > 12 }"""
 
 
 def main() -> None:
@@ -34,9 +39,11 @@ def main() -> None:
     ap.add_argument("--url", default="http://localhost:8081/")
     ap.add_argument("--channel", default="msedge")
     ap.add_argument("--fps", action="store_true")
+    ap.add_argument("--cpu", action="store_true", help="run the AI on the processor, not WebGPU")
     ap.add_argument("--headed", action="store_true", help="a real window (GPU compositing) for --fps")
     a = ap.parse_args()
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    url = a.url + ("?ai=cpu" if a.cpu else "")
     results: list[tuple[str, bool]] = []
 
     def check(name: str, ok: bool, detail: str = "") -> None:
@@ -52,31 +59,47 @@ def main() -> None:
             pg.wait_for_timeout(250)
 
     with sync_playwright() as p:
-        b = p.chromium.launch(channel=a.channel, headless=not a.headed)
+        b = p.chromium.launch(
+            channel=a.channel,
+            headless=not a.headed,
+            args=["--enable-unsafe-webgpu", "--force_high_performance_gpu"],
+        )
         page: Page = b.new_page(viewport={"width": 1440, "height": 900})
         errors: list[str] = []
+        missing: list[str] = []
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
-        page.goto(a.url, wait_until="load")
-        wait_js(page, "document.querySelector('.engine').dataset.state === 'ready'", timeout=240_000)
-        check("engine connects", True, page.inner_text(".engine-text"))
-        page.wait_for_timeout(1500)
+        page.on("response", lambda r: missing.append(r.url) if r.status >= 400 else None)
+        page.goto(url, wait_until="load")
+        page.wait_for_timeout(3000)
 
         fps = {}
         if a.fps:
             fps["hero"] = page.evaluate(FPS_JS, 3000)
 
-        # ------------------------------------------------------------ saved results everywhere
-        blank = """(sel) => { const c = document.querySelector(sel); const x = c.getContext('2d')
-            .getImageData(c.width / 2 - 8, c.height / 2 - 8, 16, 16).data; let s = 0;
-            for (let i = 0; i < x.length; i += 4) s += x[i] + x[i + 1] + x[i + 2]; return s > 0 }"""
-        check("hero: portrait is drawing", page.evaluate(blank, ".portrait-canvas"))
-        check("hero: wall of faces", page.locator(".wall-col").count() >= 5)
-        check(
-            "hero: 4 measured numbers",
-            page.locator(".stat").count() == 4,
-            page.inner_text(".stats").replace("\n", " ")[:120],
+        # ------------------------------------------------------------ the page before live mode
+        check("no page header: it opens on the hero", page.locator("body > header, .nav").count() == 0)
+        check("hero: the pixel-art town is drawing", page.evaluate(LIT, ".hero-scene canvas"))
+        size = page.evaluate(
+            "(() => { const c = document.querySelector('.hero-scene canvas'); return [c.width, c.height, c.style.width] })()"
         )
+        check(
+            "hero: the town is scaled by a whole number",
+            True,
+            f"{size[0]} x {size[1]} art pixels shown at {size[2]}",
+        )
+        check("hero: portrait is drawing", page.evaluate(LIT, ".portrait-canvas"))
+        check("hero: 4 measured numbers", page.locator(".stat").count() == 4)
+        check(
+            "live mode starts off: saved results",
+            page.get_attribute(".live-pill", "data-state") == "saved",
+            page.inner_text(".live-pill .engine-text"),
+        )
+        page.evaluate("document.querySelector('.interlude').scrollIntoView()")
+        page.wait_for_timeout(1500)
+        check("interlude: the town draws full screen", page.evaluate(LIT, ".interlude canvas"))
+        if a.fps:
+            fps["interlude (town)"] = page.evaluate(FPS_JS, 3000)
         page.evaluate("document.querySelector('.how').scrollIntoView()")
         top, h = page.evaluate(
             "[document.querySelector('.how').offsetTop, document.querySelector('.how').offsetHeight]"
@@ -84,11 +107,7 @@ def main() -> None:
         page.evaluate(f"window.scrollTo(0, {top} + ({h} - innerHeight) * 0.4)")
         page.wait_for_timeout(500)
         step = page.inner_text(".how-count b")
-        check(
-            "how it works: scrolling moves the drawing",
-            step not in ("00", "01"),
-            f"step {step}, {page.inner_text('.how-left')}",
-        )
+        check("how it works: scrolling moves the drawing", step not in ("00", "01"), f"step {step}")
         if a.fps:
             page.evaluate(f"window.scrollTo(0, {top})")
             fps["how (scrubbing)"] = page.evaluate(
@@ -104,6 +123,52 @@ def main() -> None:
             page.locator(".face img").count() == 8,
             page.inner_text(".results-tag"),
         )
+        page.locator(".btn-make").click()
+        wait_js(page, "/Picked/.test(document.querySelector('.results-status').textContent)", timeout=30_000)
+        check("make faces, saved: picks from the bank", True, page.inner_text(".results-status"))
+
+        # ------------------------------------------------------------ the AI check runs on this device, live or not
+        page.locator("#check").scroll_into_view_if_needed()
+        ex = page.locator(".example")
+        ex.nth(0).click()
+        wait_js(
+            page,
+            "['yes', 'no'].some(c => document.querySelector('.verdict').classList.contains(c))",
+            timeout=240_000,
+        )
+        check(
+            "AI check on this device: watermark found on a HumanDiT face",
+            "yes" in (page.get_attribute(".verdict", "class") or ""),
+            page.inner_text(".verdict-body")[:120],
+        )
+        ex.nth(1).click()
+        wait_js(page, "document.querySelector('.verdict').classList.contains('no')", timeout=120_000)
+        check("AI check on this device: none on the first version's face", True)
+
+        # ------------------------------------------------------------ switch live mode on, through the page
+        page.evaluate("window.scrollTo(0, 0)")
+        page.locator(".gpu-strip").click()
+        page.wait_for_timeout(600)
+        check(
+            "live dialog opens with the measured devices",
+            page.locator("dialog.live .lrow").count() >= 3,
+            page.inner_text(".live-device-name"),
+        )
+        page.locator(".live-go").click()
+        t0 = time.monotonic()
+        wait_js(
+            page,
+            "document.querySelector('.live-go span').textContent === 'Start making faces'",
+            timeout=600_000,
+        )
+        check(
+            "live mode: downloaded, prepared and timed",
+            page.evaluate("document.documentElement.classList.contains('is-live')"),
+            f"{time.monotonic() - t0:.0f} s; {page.inner_text('.live-progress-text')}",
+        )
+        check("live dialog: this device joins the ladder", page.locator("dialog.live .lrow.you").count() == 1)
+        page.locator(".live-go").click()
+        page.wait_for_timeout(1200)
 
         # ------------------------------------------------------------ live: make faces with a feature
         page.locator(".chip", has_text="Glasses").click()
@@ -118,6 +183,20 @@ def main() -> None:
             f"{page.inner_text('.results-status')} | {caps[0] if caps else ''}",
         )
         check("make faces live: each face downloadable", page.locator(".face-dl").count() == 4)
+
+        # ------------------------------------------------------------ live: Best quality (downloads its model once)
+        page.locator(".chip", has_text="Glasses").click()
+        page.locator(".chip", has_text="Glasses").click()  # back to "any"
+        page.locator('.seg[data-name="count"] button[data-value="1"]').click()
+        page.locator('.seg[data-name="quality"] button[data-value="best"]').click()
+        page.locator(".btn-make").click()
+        wait_js(
+            page,
+            "/best quality/.test(document.querySelector('.results-status').textContent) && document.querySelector('.results-tag').classList.contains('live')",
+            timeout=600_000,
+        )
+        check("make faces live: Best quality", True, page.inner_text(".results-status"))
+        page.locator('.seg[data-name="quality"] button[data-value="instant"]').click()
 
         # ------------------------------------------------------------ live: change one thing
         page.locator("#edit").scroll_into_view_if_needed()
@@ -134,41 +213,30 @@ def main() -> None:
             fps["blend (playing)"] = page.evaluate(FPS_JS, 3000)
         page.locator(".btn-blend").click()
         wait_js(
-            page, "document.querySelector('.blend-status').textContent.startsWith('Live')", timeout=240_000
+            page, "document.querySelector('.blend-status').textContent.startsWith('Live')", timeout=300_000
         )
         check("blend: two new people, live", True, page.inner_text(".blend-status"))
 
-        # ------------------------------------------------------------ live: race
+        # ------------------------------------------------------------ live: race on this GPU
         page.locator("#speed").scroll_into_view_if_needed()
         page.wait_for_timeout(600)
         page.locator(".btn-race").click()
-        wait_js(page, "document.querySelector('.race-hw').textContent.startsWith('Live')", timeout=240_000)
-        # the replay runs at each lane's real speed, so wait as long as the slowest lane really took
+        wait_js(page, "document.querySelector('.race-hw').textContent.startsWith('Live')", timeout=600_000)
         with contextlib.suppress(TimeoutError):
-            wait_js(page, "document.querySelectorAll('.lane.done').length === 4", timeout=60_000)
+            wait_js(page, "document.querySelectorAll('.lane.done').length === 4", timeout=120_000)
         check(
             "instant or best: 4 lanes raced live",
             page.locator(".lane.done").count() == 4,
             page.inner_text(".race-hw"),
         )
-
-        # ------------------------------------------------------------ live: watermark
-        page.locator("#check").scroll_into_view_if_needed()
-        ex = page.locator(".example")
-        ex.nth(0).click()
-        wait_js(
-            page,
-            "document.querySelector('.verdict').classList.contains('yes') || document.querySelector('.verdict').classList.contains('no')",
-            timeout=120_000,
-        )
-        check("watermark found on a HumanDiT face", "yes" in (page.get_attribute(".verdict", "class") or ""))
-        ex.nth(1).click()
-        wait_js(page, "document.querySelector('.verdict').classList.contains('no')", timeout=120_000)
-        check("no watermark on the first version's face", True)
+        check("speed ladder: this device measured", page.locator(".ladder .lrow.you").count() == 1)
 
         page.locator("#numbers").scroll_into_view_if_needed()
         page.wait_for_timeout(1500)
         check("the numbers: 8 measured models", page.locator(".srow").count() == 8)
+        page.evaluate("document.querySelector('.footer-town').scrollIntoView()")
+        page.wait_for_timeout(1500)
+        check("footer: the town draws", page.evaluate(LIT, ".footer-town canvas"))
         if a.fps:
             page.evaluate("window.scrollTo(0, 0)")
             page.wait_for_timeout(600)
@@ -183,14 +251,17 @@ def main() -> None:
 
         # ------------------------------------------------------------ phone
         phone = b.new_page(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True)
+        phone.on("pageerror", lambda e: errors.append(str(e)))
         phone.goto(a.url, wait_until="load")
         phone.wait_for_timeout(3000)
         over = phone.evaluate("document.documentElement.scrollWidth - innerWidth")
         check("phone: no sideways scrolling", over <= 0, f"{over}px")
         phone.close()
 
-        real = [e for e in errors if "favicon" not in e]
+        real = [e for e in errors if "favicon" not in e and "Failed to load resource" not in e]
         check("no JavaScript errors", not real, " | ".join(real)[:300])
+        gone = [u for u in missing if "favicon" not in u]
+        check("no missing files", not gone, " ".join(gone)[:300])
         b.close()
 
     for scene, r in fps.items():

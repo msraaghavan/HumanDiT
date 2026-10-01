@@ -1,5 +1,5 @@
-"""The static website (site/): every file the page loads exists, the saved results are complete, and the Cloudflare
-build fills in the engine and a strict content security policy."""
+"""The static website (site/): every file the page loads exists, the saved results are complete, the in-browser AI's
+pieces are in place, and the Cloudflare build writes a strict content security policy with cross-origin isolation."""
 
 import json
 import re
@@ -17,9 +17,13 @@ def test_page_references_exist():
     assert refs, "no local references found"
     missing = [r for r in refs if not (SITE / r).exists()]
     assert not missing, missing
-    js = (SITE / "js" / "engine.js").read_text(encoding="utf-8")
-    vendored = re.search(r'from "\.\./(vendor/[^"]+)"', js).group(1)
+    worker = (SITE / "js" / "ai" / "worker.js").read_text(encoding="utf-8")
+    vendored = re.search(r'from "\.\./\.\./(vendor/[^"]+)"', worker).group(1)
     assert (SITE / vendored).exists()
+    assert (SITE / "vendor" / "ort" / "ort-wasm-simd-threaded.asyncify.wasm.gz").exists()
+    for f in ("archivo", "inter", "jetbrains-mono"):  # served with the page: no third-party requests
+        assert (SITE / "fonts" / f"{f}.woff2").exists()
+    assert "fonts.googleapis.com" not in html
 
 
 def test_saved_results_are_complete():
@@ -43,10 +47,9 @@ def test_cloudflare_build(tmp_path):
         [
             sys.executable,
             str(ROOT / "scripts/site/build_site.py"),
-            "--space",
-            "someone/HumanDiT-engine",
-            "--model",
-            "someone/HumanDiT",
+            "--github",
+            "https://github.com/someone/HumanDiT",
+            "--no-models",
             "--out",
             str(out),
         ],
@@ -54,11 +57,27 @@ def test_cloudflare_build(tmp_path):
         cwd=ROOT,
     )
     cfg = (out / "config.js").read_text(encoding="utf-8")
-    assert 'space: "someone/HumanDiT-engine"' in cfg and "__SPACE__" not in cfg
-    assert 'local: ""' in cfg
-    assert "https://huggingface.co/someone/HumanDiT" in cfg
+    assert "https://github.com/someone/HumanDiT" in cfg
     assert json.loads((out / "wrangler.jsonc").read_text())["name"] == "humandit"
     assert "wrangler.jsonc" in (out / ".assetsignore").read_text()
+    assert not (out / "models").exists()
     headers = (out / "_headers").read_text(encoding="utf-8")
-    assert "script-src 'self';" in headers and "unsafe-eval" not in headers
-    assert "connect-src 'self' https://huggingface.co https://*.hf.space" in headers
+    assert "script-src 'self' 'wasm-unsafe-eval';" in headers and "'unsafe-eval'" not in headers
+    assert "connect-src 'self' blob:;" in headers and "huggingface" not in headers
+    assert "Cross-Origin-Embedder-Policy: require-corp" in headers  # threads for the processor fallback
+
+
+def test_model_manifest_if_exported():
+    """site/models is built by scripts/site/export_web_models.py (not committed); when present it must be whole."""
+    man = SITE / "models" / "manifest.json"
+    if not man.exists():
+        return
+    m = json.loads(man.read_text())
+    for key, f in m["files"].items():
+        parts = [SITE / "models" / m["version"] / f"{key}.{i:02d}" for i in range(f["parts"])]
+        assert all(q.exists() for q in parts), key
+        assert sum(q.stat().st_size for q in parts) == f["bytes"], key
+        assert all(q.stat().st_size <= 25 * 2**20 for q in parts), key  # Cloudflare's file limit
+    assert set(m["packs"]["core"]) == {"generator", "decoder", "tm_encoder"}
+    assert len(m["watermark"]["bits"]) == 100
+    assert len(m["features"]) == 12

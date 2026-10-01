@@ -3,8 +3,8 @@
     uv run --extra demo python app/api.py --port 7861 &      # the engine, on this machine's GPU
     uv run python scripts/site/build_assets.py                # -> site/assets/
 
-The page never starts empty: while the Hugging Face Space wakes up (or if a visitor's free GPU time is used up), each
-section shows these results, made by the same endpoints with fixed seeds and labelled with where they ran. Every
+The page never starts empty: until a visitor switches live mode on (the AI running on their own device), each section
+shows these results, made by the same models with fixed seeds and labelled with where they ran. Every
 picture is a model output and every number is measured: timings from this run, scores from runs/eval*.
 """
 

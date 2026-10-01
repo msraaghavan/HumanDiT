@@ -1,17 +1,19 @@
-"""Assemble the website for Cloudflare Pages: dist/site, with the engine's Space and the links filled in.
+"""Assemble the website for Cloudflare: dist/site, with the AI's models and the links filled in.
 
-    uv run python scripts/site/build_site.py --space USER/HumanDiT-engine --model USER/HumanDiT \
-        [--github https://github.com/USER/REPO]
+    uv run --extra demo python scripts/site/export_web_models.py   # once: site/models/ (not committed)
+    uv run python scripts/site/build_site.py [--github https://github.com/USER/REPO]
 
 Then deploy the folder, after logging in to Cloudflare yourself (`npx wrangler login`):
 
     npx wrangler deploy --cwd dist/site
 
 The folder carries its own wrangler.jsonc (a Worker named humandit that serves these static files; Cloudflare Pages
-is now part of Workers) and an .assetsignore, so that config is never published as a page.
+is now part of Workers) and an .assetsignore, so that config is never published as a page. There is no server: the
+models run in each visitor's browser, on their graphics chip or processor.
 
-Also writes Cloudflare's _headers: a content security policy that lets the page talk only to Hugging Face (the
-engine) and Google Fonts, and long caching for the vendored client. Nothing is uploaded by this script.
+Also writes Cloudflare's _headers: a content security policy that lets the page load nothing from anywhere else,
+cross-origin isolation (the AI's multi-threaded processor fallback needs it), and long caching for the versioned
+model parts. Nothing is uploaded by this script.
 """
 
 from __future__ import annotations
@@ -28,13 +30,14 @@ SITE = ROOT / "site"
 CSP = "; ".join(
     [
         "default-src 'self'",
-        "script-src 'self'",
-        "style-src 'self' https://fonts.googleapis.com",
+        "script-src 'self' 'wasm-unsafe-eval'",  # ONNX Runtime Web compiles its WebAssembly
+        "worker-src 'self'",
+        "style-src 'self'",
         "style-src-attr 'unsafe-inline'",  # the HTML's per-element animation delays (style="--d:.5s")
-        "font-src https://fonts.gstatic.com",
-        "img-src 'self' data: blob: https://*.hf.space",
+        "font-src 'self'",
+        "img-src 'self' data: blob:",  # faces made on the device are blobs
         "media-src 'self'",
-        "connect-src 'self' https://huggingface.co https://*.hf.space wss://*.hf.space",
+        "connect-src 'self' blob:",  # reading back a face made on this device (blob:)
         "frame-ancestors 'none'",
         "base-uri 'self'",
         "form-action 'none'",
@@ -47,40 +50,45 @@ HEADERS = f"""/*
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
   Permissions-Policy: camera=(), microphone=(), geolocation=(), interest-cohort=()
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: require-corp
+  Cross-Origin-Resource-Policy: same-origin
 /vendor/*
   Cache-Control: public, max-age=31536000, immutable
+/models/*/*
+  Cache-Control: public, max-age=31536000, immutable
+/fonts/*
+  Cache-Control: public, max-age=2592000
 /assets/*
   Cache-Control: public, max-age=86400
 """
 
+ISOLATION = {
+    "Cross-Origin-Opener-Policy": "same-origin",
+    "Cross-Origin-Embedder-Policy": "require-corp",
+    "Cross-Origin-Resource-Policy": "same-origin",
+}
+
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument(
-        "--space",
-        help="USER/NAME of the Hugging Face Space running app/api.py; without it the site shows its saved results",
-    )
-    ap.add_argument("--model", help="USER/NAME of the model repo, for the link to the model card")
     ap.add_argument("--github", help="https://github.com/USER/REPO, for the link to the code")
+    ap.add_argument("--model-card", help="a URL for the model card, if it is published somewhere")
     ap.add_argument("--worker", default="humandit", help="the Cloudflare Worker's name (its URL)")
     ap.add_argument("--out", default="dist/site")
+    ap.add_argument("--no-models", action="store_true", help="build without site/models (saved results only)")
     a = ap.parse_args()
-    if a.space and not re.fullmatch(r"[\w.-]+/[\w.-]+", a.space):
-        raise SystemExit(f"--space should look like USER/NAME, not {a.space!r}")
     out = ROOT / a.out
+    if not (a.no_models or (SITE / "models" / "manifest.json").exists()):
+        raise SystemExit(
+            "site/models is missing: run scripts/site/export_web_models.py (or pass --no-models)"
+        )
     shutil.rmtree(out, ignore_errors=True)
-    shutil.copytree(SITE, out, ignore=shutil.ignore_patterns("*.map", ".DS_Store"))
-    links = {
-        "github": a.github or "",
-        "model": f"https://huggingface.co/{a.model}" if a.model else "",
-        "space": f"https://huggingface.co/spaces/{a.space}" if a.space else "",
-    }
+    skip = ["*.map", ".DS_Store", ".gitignore"] + (["models"] if a.no_models else [])
+    shutil.copytree(SITE, out, ignore=shutil.ignore_patterns(*skip))
+    links = {"github": a.github or "", "model": a.model_card or ""}
     cfg = (SITE / "config.js").read_text(encoding="utf-8")
-    cfg = cfg.replace('space: "__SPACE__"', f"space: {json.dumps(a.space or '')}")
     cfg = re.sub(r"links: \{[^}]*\}", "links: " + json.dumps(links), cfg)
-    # a deployed copy never talks to an engine on the visitor's own machine
-    cfg = re.sub(r'local: "[^"]*"', 'local: ""', cfg)
-    assert "__SPACE__" not in cfg
     (out / "config.js").write_text(cfg, encoding="utf-8")
     (out / "_headers").write_text(HEADERS, encoding="utf-8")
     worker = {"name": a.worker, "compatibility_date": "2026-09-26", "assets": {"directory": "."}}
@@ -90,8 +98,12 @@ def main() -> None:
     if missing:
         raise SystemExit(f"missing {missing}: run scripts/site/build_assets.py and og_image.py first")
     files = [f for f in out.rglob("*") if f.is_file()]
+    big = [str(f.relative_to(out)) for f in files if f.stat().st_size > 25 * 2**20]
+    if big:
+        raise SystemExit(f"Cloudflare serves files up to 25 MiB; too big: {big}")
     print(
-        f"{out}: {len(files)} files, {sum(f.stat().st_size for f in files) / 2**20:.1f} MB; engine {a.space or 'none (saved results only)'}"
+        f"{out}: {len(files)} files, {sum(f.stat().st_size for f in files) / 2**20:.1f} MB; "
+        f"models {'none (saved results only)' if a.no_models else 'included'}"
     )
 
 

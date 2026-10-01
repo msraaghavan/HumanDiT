@@ -4,18 +4,17 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>HumanDiT: faces of people who don't exist</title>
-  <meta name="description" content="An AI that invents realistic faces of people who don't exist, with the features you choose. Every picture carries an invisible watermark. A research project with every number measured.">
+  <meta name="description" content="An AI that invents realistic faces of people who don't exist, with the features you choose. It runs in your browser, on your own graphics chip: nothing is uploaded. Every picture carries an invisible watermark.">
   <meta name="theme-color" content="#05060b">
   <meta name="color-scheme" content="dark">
   <meta property="og:type" content="website">
   <meta property="og:title" content="HumanDiT: faces of people who don't exist">
-  <meta property="og:description" content="An AI that invents realistic faces from scratch. Try it live: choose features, watch it draw, blend two people, check the hidden watermark.">
+  <meta property="og:description" content="An AI that invents realistic faces from scratch, running on your own GPU in the browser. Choose features, blend two people, check the hidden watermark.">
   <meta property="og:image" content="assets/og.jpg">
   <meta name="twitter:card" content="summary_large_image">
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..900&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap">
+  <link rel="preload" href="fonts/archivo.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="fonts/inter.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="css/site.css">
   <link rel="preload" href="assets/site.json" as="fetch" crossorigin>
   <script src="config.js"></script>
@@ -26,39 +25,33 @@
   <div class="intro" aria-hidden="true"><canvas></canvas><span class="intro-word">HumanDiT</span></div>
   <div class="grain" aria-hidden="true"><i></i></div>
 
-  <header class="nav">
-    <a class="brand" href="#top" aria-label="HumanDiT, back to the top"><span class="brand-mark" aria-hidden="true"></span>HumanDiT</a>
-    <nav class="nav-links" aria-label="Sections">
-      <a href="#how">How it works</a>
-      <a href="#studio">Make faces</a>
-      <a href="#edit">Change one thing</a>
-      <a href="#blend">Blend</a>
-      <a href="#speed">Speed</a>
-      <a href="#check">AI check</a>
-      <a href="#numbers">The numbers</a>
-    </nav>
-    <div class="engine" role="status" aria-live="polite" data-state="idle">
-      <span class="engine-dot" aria-hidden="true"></span><span class="engine-text">Engine: connecting</span>
-    </div>
-    <span class="nav-progress" aria-hidden="true"><i></i></span>
-  </header>
+  <button class="live-pill" type="button" data-golive data-state="saved" aria-label="Live mode: open the details">
+    <span class="engine-dot" aria-hidden="true"></span><span class="engine-text" role="status" aria-live="polite">Saved results</span>
+    <span class="live-pill-go"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/><rect x="9.5" y="9.5" width="5" height="5" rx=".8"/></svg><span>Run on your GPU</span></span>
+  </button>
 
   <main>
     <!-- ============================================================ hero -->
     <section class="hero" id="top">
-      <div class="wall" aria-hidden="true"></div>
+      <div class="scene hero-scene" data-scene="hero" aria-hidden="true"></div>
+      <div class="hero-shade" aria-hidden="true"></div>
       <div class="hero-grid">
         <div class="hero-copy">
           <p class="eyebrow" data-reveal><span class="pulse" aria-hidden="true"></span>A generative AI research project</p>
           <h1 class="display" data-split>Faces of people <span class="neon">who don't exist.</span></h1>
           <p class="lede" data-reveal style="--d:.5s">This AI invents realistic faces from scratch. <strong>None of these people are real.</strong>
-            Choose the features you want and it draws new people in about a second. Every picture carries an invisible
-            watermark, so it can always be identified as AI-made.</p>
+            Choose the features you want and it draws new people on your own graphics chip, right in this page: nothing is
+            uploaded anywhere. Every picture carries an invisible watermark, so it can always be identified as AI-made.</p>
           <div class="cta" data-reveal style="--d:.62s">
             <a class="btn btn-primary" href="#studio" data-magnetic><span>Make a face</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a>
             <button class="btn btn-ghost" type="button" data-reel data-magnetic><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg><span>Watch the 15-second reel</span></button>
           </div>
-          <dl class="stats" data-reveal style="--d:.74s"></dl>
+          <button class="gpu-strip" type="button" data-golive data-reveal style="--d:.7s">
+            <span class="gpu-strip-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/><rect x="9.5" y="9.5" width="5" height="5" rx=".8"/></svg></span>
+            <span class="gpu-strip-text"><b>Runs on your GPU.</b> The faster your graphics chip, the faster the faces: NVIDIA, AMD, Intel, Apple, or just the processor.</span>
+            <span class="gpu-strip-go">Switch on<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></span>
+          </button>
+          <dl class="stats" data-reveal style="--d:.8s"></dl>
         </div>
         <figure class="portrait" data-reveal style="--d:.3s">
           <div class="portrait-frame">
@@ -79,6 +72,16 @@
 
     <!-- ============================================================ ticker -->
     <div class="ticker" aria-hidden="true"><div class="ticker-track"></div></div>
+
+    <!-- ============================================================ interlude: the town, full screen -->
+    <section class="interlude" aria-label="Interlude">
+      <div class="scene" data-scene="interlude" aria-hidden="true"></div>
+      <div class="interlude-copy">
+        <p class="kicker interlude-kicker">Pixel by pixel</p>
+        <p class="interlude-line" data-split>Every lit window holds someone <span class="neon">who never lived.</span></p>
+        <p class="small interlude-note">The faces in the big windows were invented by this site's AI. The town, the rain and the fire are drawn live in your browser, pixel by pixel.</p>
+      </div>
+    </section>
 
     <!-- ============================================================ how it works (scroll-driven) -->
     <section class="how" id="how">
@@ -117,15 +120,15 @@
       <header class="section-head" data-reveal-head>
         <p class="kicker"><span class="num">01</span>Make faces</p>
         <h2 class="h2" data-split>Invent someone new</h2>
-        <p class="section-lede" data-reveal>Pick what each face must have, or must not have, and press the button. Each press invents new people. Under each face, a second AI (the <em>checker</em>) confirms what came out as asked.</p>
+        <p class="section-lede" data-reveal data-saved="Pick what each face must have, or must not have, and press the button. Until live mode is on, each press picks new people from hundreds of faces this AI made earlier, uncurated. Switch it on and every press invents new people on your own GPU. Under each face, a second AI (the checker) confirms what it has.">Pick what each face must have, or must not have, and press the button. Each press invents new people, on your own graphics chip. Under each face, a second AI (the <em>checker</em>) confirms what came out as asked.</p>
       </header>
       <div class="studio-grid">
         <form class="panel controls" data-reveal onsubmit="return false">
           <fieldset class="field">
             <legend>Speed or quality</legend>
             <div class="seg" data-name="quality" role="radiogroup">
-              <button type="button" role="radio" aria-checked="true" data-value="instant"><b>Instant</b><small>under a second</small></button>
-              <button type="button" role="radio" aria-checked="false" data-value="best"><b>Best quality</b><small>a few seconds</small></button>
+              <button type="button" role="radio" aria-checked="true" data-value="instant"><b>Instant</b><small>1 step</small></button>
+              <button type="button" role="radio" aria-checked="false" data-value="best"><b>Best quality</b><small>25 steps</small></button>
               <i class="seg-pill" aria-hidden="true"></i>
             </div>
           </fieldset>
@@ -151,6 +154,7 @@
             <p class="results-status" aria-live="polite"></p>
             <span class="results-tag"></span>
           </div>
+          <button class="nudge" type="button" data-golive><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/><rect x="9.5" y="9.5" width="5" height="5" rx=".8"/></svg><span>Make these live on your GPU</span></button>
           <div class="faces" data-count="8"></div>
         </div>
       </div>
@@ -181,6 +185,7 @@
           </div>
           <button class="btn btn-ghost btn-wide btn-edit" type="button">Try another person</button>
           <p class="small edit-status" aria-live="polite"></p>
+          <button class="nudge" type="button" data-golive><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/><rect x="9.5" y="9.5" width="5" height="5" rx=".8"/></svg><span>Make these live on your GPU</span></button>
         </div>
       </div>
     </section>
@@ -201,8 +206,9 @@
           <div class="blend-ends"><canvas class="blend-a" width="96" height="96" aria-hidden="true"></canvas><span>Person A</span><span class="blend-mid"></span><span>Person B</span><canvas class="blend-b" width="96" height="96" aria-hidden="true"></canvas></div>
           <input class="range blend-range" type="range" min="0" max="1000" value="0" aria-label="Blend from person A to person B">
           <div class="blend-actions">
-            <button class="btn btn-ghost btn-blend" type="button">Blend two new people</button>
+            <button class="btn btn-ghost btn-blend" type="button" data-saved="Show another blend">Blend two new people</button>
             <p class="small blend-status" aria-live="polite"></p>
+            <button class="nudge" type="button" data-golive><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/><rect x="9.5" y="9.5" width="5" height="5" rx=".8"/></svg><span>Make these live on your GPU</span></button>
           </div>
         </div>
       </div>
@@ -213,15 +219,25 @@
       <header class="section-head" data-reveal-head>
         <p class="kicker"><span class="num">04</span>Instant or best</p>
         <h2 class="h2" data-split>One step, or twenty-five?</h2>
-        <p class="section-lede" data-reveal>The same starting static, drawn four ways. Instant mode is a second AI trained to jump straight to the answer. Best quality takes more clean-up steps: slower, but closer to a real photo.</p>
+        <p class="section-lede" data-reveal>The same starting static, drawn four ways. Instant mode is a second AI trained to jump straight to the answer. Best quality takes more clean-up steps: slower, but closer to a real photo. With live mode on, the race runs on your own graphics chip.</p>
       </header>
       <div class="race panel" data-reveal>
         <div class="race-head"><span>Time to draw, replayed at real speed</span><span class="race-hw"></span></div>
         <div class="lanes"></div>
         <div class="race-foot">
           <p class="small">Realism gap: how far the faces are from real photos, measured on 50,000 faces (FID, lower is better).</p>
-          <button class="btn btn-ghost btn-race" type="button">Race again, live</button>
+          <button class="btn btn-ghost btn-race" type="button" data-saved="Race another person">Race again on your GPU</button>
         </div>
+      </div>
+      <div class="ladder panel" data-reveal>
+        <div class="ladder-head">
+          <div>
+            <h3 class="h3">The faster your GPU, the faster the faces</h3>
+            <p class="small">Instant faces a minute, each measured through this page. Every face is made on the visitor's own device; nothing is uploaded.</p>
+          </div>
+          <button class="btn btn-ghost ladder-go" type="button" data-golive><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/><rect x="9.5" y="9.5" width="5" height="5" rx=".8"/></svg><span>Measure yours</span></button>
+        </div>
+        <div class="ladder-rows"></div>
       </div>
     </section>
 
@@ -230,7 +246,7 @@
       <header class="section-head" data-reveal-head>
         <p class="kicker"><span class="num">05</span>Is it AI-made?</p>
         <h2 class="h2" data-split>A signature you can't see</h2>
-        <p class="section-lede" data-reveal>Every face this site makes carries an invisible watermark. It survives resizing and compression. Drop any picture here, or try the two examples.</p>
+        <p class="section-lede" data-reveal >Every face this site makes carries an invisible watermark. It survives resizing and compression. Drop any picture here, or try the two examples: the check runs on your device, and the picture never leaves it.</p>
       </header>
       <div class="check-grid">
         <label class="drop" data-reveal>
@@ -293,8 +309,7 @@
           <dl class="fact-list"></dl>
           <div class="links" hidden>
             <a class="link" data-link="github" href="#" hidden>Code and write-up</a>
-            <a class="link" data-link="model" href="#" hidden>Model card and weights</a>
-            <a class="link" data-link="space" href="#" hidden>Engine on Hugging Face</a>
+            <a class="link" data-link="model" href="#" hidden>Model card</a>
           </div>
         </div>
       </div>
@@ -304,15 +319,37 @@
   <footer class="footer">
     <div class="footer-inner">
       <p class="footer-big" data-split>Nobody here exists.</p>
-      <p class="small">Every face on this site is invented by an AI; none of them are real people. For research and education only, not for commercial use. Trained on FFHQ (CC BY-NC-SA 4.0) with RAEv2 (CC BY-NC 4.0) and DINOv3 (DINOv3 License) components. Live results run on Hugging Face ZeroGPU; results shown before the engine answers were made earlier by the same AI and are labelled.</p>
+      <p class="small">Every face on this site is invented by an AI; none of them are real people. For research and education only, not for commercial use. Trained on FFHQ (CC BY-NC-SA 4.0) with RAEv2 (CC BY-NC 4.0) and DINOv3 (DINOv3 License) components. <span data-saved="Live mode runs the AI in your browser, on your own graphics chip or processor; nothing is uploaded. Until you switch it on, results were made earlier by the same AI on a laptop GPU, uncurated, and are labelled as such.">Live results are made in your browser, on your own graphics chip or processor; nothing is uploaded. Results made earlier by the same AI are labelled as such.</span></p>
       <p class="small footer-meta">HumanDiT · M S Raaghavan · 2026</p>
     </div>
+    <div class="footer-town"><div class="scene" data-scene="footer" aria-hidden="true"></div></div>
   </footer>
 
   <dialog class="reel">
     <div class="reel-box">
       <video class="reel-video" src="assets/reel.mp4" poster="assets/reel_poster.jpg" playsinline controls preload="none"></video>
       <button class="reel-close" type="button" aria-label="Close the reel"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    </div>
+  </dialog>
+  <dialog class="live" aria-labelledby="live-title">
+    <div class="live-box">
+      <button class="live-close" type="button" aria-label="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+      <p class="kicker live-kicker">Live mode</p>
+      <h2 class="live-title" id="live-title">Run the AI on your own device</h2>
+      <p class="live-lede">The models download once and run in this page, on your graphics chip. Nothing you make is uploaded. <b>The faster your GPU, the faster the faces.</b></p>
+      <div class="live-device">
+        <span class="live-device-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/><rect x="9.5" y="9.5" width="5" height="5" rx=".8"/></svg></span>
+        <div><p class="live-device-name">Checking this device…</p><p class="small live-device-note"></p></div>
+      </div>
+      <div class="ladder-rows live-ladder"></div>
+      <div class="live-progress" hidden>
+        <div class="live-bar"><i></i></div>
+        <p class="small live-progress-text" aria-live="polite"></p>
+      </div>
+      <div class="live-actions">
+        <button class="btn btn-primary live-go" type="button" data-magnetic><span>Download and run</span></button>
+        <p class="small live-size"></p>
+      </div>
     </div>
   </dialog>
   <div class="toast" role="alert" hidden></div>

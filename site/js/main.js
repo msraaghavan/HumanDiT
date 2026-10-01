@@ -1,7 +1,8 @@
-// HumanDiT website: every section starts from results the AI made earlier (assets/site.json, labelled as such) and
-// switches to live results from the engine when a visitor asks for something.
+// HumanDiT website: every section starts from results the AI made earlier (assets/site.json, labelled as such). When
+// the visitor switches live mode on, the AI downloads once and every button runs it on their own device (engine.js).
 
 import * as engine from "./engine.js";
+import { nightScene } from "./pixel.js";
 import {
   animate,
   clamp,
@@ -38,8 +39,7 @@ const ICON = {
   no: '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3 3l6 6M9 3l-6 6"/></svg>',
   dl: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>',
 };
-const hwLabel = (hw) =>
-  /zerogpu/i.test(hw) ? "a shared cloud GPU (Hugging Face ZeroGPU)" : /cpu/i.test(hw) ? "a CPU" : hw;
+const hwLabel = (hw) => (/^your /.test(hw) ? hw : /cpu/i.test(hw) ? "a CPU" : `a laptop GPU (${hw})`);
 const madeEarlier = (hw) => `Made earlier on ${hwLabel(hw)}`;
 
 // CSS resolves url() in a custom property against the stylesheet, so pass absolute URLs
@@ -56,6 +56,23 @@ function toast(msg, ms = 7000) {
   toast.timer = setTimeout(() => (t.hidden = true), ms);
 }
 
+// ================================================================== saved results: the bank
+// While the live engine is away, every button answers from a bank of results the AI made earlier (uncurated, made
+// by the same endpoints; scripts/site/build_bank.py) and says so. `paused` means no engine is configured at all.
+let paused = true; // until live mode is on, every button answers from the bank
+engine.onStatus(() => (paused = !engine.live()));
+let BANK = null;
+const bank = () =>
+  (BANK ||= fetch("assets/bank.json")
+    .then((r) => (r.ok ? r.json() : null))
+    .catch(() => null));
+const wait = (ms) => new Promise((r) => setTimeout(r, reduced ? 0 : ms));
+
+/** Say why a saved result is showing: nothing if live mode is simply paused, else the engine's problem. */
+function fellBack(err) {
+  if (!paused) toast(`${err.message} Showing a saved result instead.`);
+}
+
 function staticLayer() {
   const s = el("span", "static");
   s.setAttribute("aria-hidden", "true");
@@ -70,14 +87,18 @@ function ticking(node, label) {
   const stop = animate(null, (now) => {
     node.innerHTML = `${esc(text)} <b>${((now - t0) / 1000).toFixed(1)} s</b>`;
   }, 12);
-  const off = engine.onStatus((s) => s.state === "waking" && (text = WAKING));
-  const done = () => (stop(), off());
+  const done = () => stop();
   done.label = (t) => (text = t);
   return done;
 }
-const WAKING = "Waking the GPU server (the first request after a quiet spell can take a minute)…";
-const ordinal = (n) => `${n}${["th", "st", "nd", "rd"][n % 100 > 10 && n % 100 < 14 ? 0 : n % 10 < 4 ? n % 10 : 0]}`;
-const inLine = (pos) => `In line for a GPU: ${ordinal(pos)}…`;
+
+/** Progress from the engine, in words: a first-time download of the Best quality model, or steps of the work. */
+const progressWords = (p, doing) =>
+  p.pack === "best" || p.phase
+    ? p.phase === "preparing"
+      ? "Preparing the Best quality model for your device…"
+      : `Downloading the Best quality model (once): ${Math.round(p.got / 1e6)} of ${Math.round(p.total / 1e6)} MB…`
+    : `${doing} ${p.k} of ${p.of}…`;
 
 // ================================================================== intro: the page denoises itself (once a visit)
 function intro() {
@@ -133,37 +154,9 @@ function intro() {
 
 // ================================================================== chrome: nav, progress, active section
 function chrome() {
-  const nav = $(".nav");
-  const bar = $(".nav-progress i");
-  let lastY = scrollY;
-  let queued = false;
-  const update = () => {
-    queued = false;
-    const y = scrollY;
-    const max = document.documentElement.scrollHeight - innerHeight;
-    bar.style.transform = `scaleX(${max > 0 ? y / max : 0})`;
-    if (Math.abs(y - lastY) > 6) {
-      nav.classList.toggle("hide", y > lastY && y > 400);
-      lastY = y;
-    }
-  };
-  addEventListener("scroll", () => {
-    if (!queued) {
-      queued = true;
-      requestAnimationFrame(update);
-    }
-  }, { passive: true });
-  const links = new Map($$(".nav-links a").map((a) => [a.getAttribute("href").slice(1), a]));
-  const spy = new IntersectionObserver(
-    (entries) =>
-      entries.forEach((e) => {
-        if (!e.isIntersecting) return;
-        links.forEach((a) => a.classList.remove("on"));
-        links.get(e.target.id)?.classList.add("on");
-      }),
-    { rootMargin: "-45% 0px -50% 0px" },
-  );
-  $$("main section[id]").forEach((s) => spy.observe(s));
+  const pill = $(".live-pill");
+  const hero = $(".hero");
+  new IntersectionObserver(([e]) => pill.classList.toggle("show", !e.isIntersecting), { threshold: 0.15 }).observe(hero);
 }
 
 // ================================================================== pointer-driven polish
@@ -197,40 +190,30 @@ function polish() {
     frame.style.setProperty("--ry", "0deg");
     frame.style.setProperty("--rx", "0deg");
   });
-  const wallBox = $(".wall");
-  animate(hero, () => wallBox.style.setProperty("--py", `${-scrollY * 0.18}px`), 60);
 }
 
 // ================================================================== hero
-function wall() {
-  const box = $(".wall");
-  const f = SITE.faces;
-  const rows = Math.ceil(f.n / f.cols);
-  const cols = innerWidth < 640 ? 5 : 8;
-  const per = 9;
-  box.style.setProperty("--sheet", FACES_URL);
-  box.style.setProperty("--bs", `${f.cols * 100}% ${rows * 100}%`);
-  for (let c = 0; c < cols; c++) {
-    const col = el("div", "wall-col");
-    col.style.setProperty("--t", `${70 + ((c * 17) % 40)}s`);
-    const faces = Array.from({ length: per }, (_, j) => (c * per + j * 5) % f.n);
-    [...faces, ...faces].forEach((k) => {
-      const s = el("span");
-      s.style.setProperty(
-        "--bp",
-        `${((k % f.cols) / (f.cols - 1)) * 100}% ${(Math.floor(k / f.cols) / (rows - 1)) * 100}%`,
-      );
-      col.append(s);
-    });
-    box.append(col);
-  }
+function scenes() {
+  // each scene is a different street of the same rainy town: where the fire, the lamp and the big windows stand
+  const LOOK = {
+    hero: { seed: 11, fire: 0.66, lamp: 0.535, faces: 0.9, moon: 0.62 },
+    interlude: { seed: 23, fire: 0.34, lamp: 0.74, faces: 0.56, moon: 0.2, street: 0.84, tall: 0.78 },
+    footer: { seed: 5, fire: 0.7, lamp: 0.18, faces: 0.42, moon: 0.62, street: 0.82 },
+  };
+  const made = $$("[data-scene]").map((n) => nightScene(n, LOOK[n.dataset.scene] || {}));
+  loadImage(new URL(`assets/${SITE.faces.file}`, location.href).href)
+    .then((im) => made.forEach((m) => m.faces(im)))
+    .catch(() => {});
 }
 
 function stats() {
   const m = SITE.metrics;
-  const sp = SITE.speed;
+  const gpu = SPEEDS?.devices?.find((d) => d.kind === "gpu");
+  const cpu = SPEEDS?.devices?.find((d) => d.kind === "cpu");
   const rows = [
-    { to: sp.student_ms / 1000, from: sp.teacher_s, dec: 2, unit: " s", label: `per face in Instant mode, on a laptop GPU (careful mode: ${sp.teacher_s.toFixed(1)} s)` },
+    gpu
+      ? { to: gpu.instant_s, from: cpu?.instant_s || 10, dec: 2, unit: " s", label: `a face, made in this page on a 2020 laptop's GPU${cpu ? ` (${cpu.instant_s.toFixed(0)} s on its processor alone)` : ""}` }
+      : { to: SITE.speed.student_ms / 1000, from: SITE.speed.teacher_s, dec: 2, unit: " s", label: "per face in Instant mode, on a laptop GPU" },
     { to: m.fid_after, from: m.fid_before, dec: 2, unit: "", label: `realism gap, lower is better (the first version: ${m.fid_before.toFixed(1)})` },
     { to: m.n_attributes, from: 0, dec: 0, unit: "", label: "features you can ask for, or rule out" },
     { to: Math.round(m.memorised * m.memo_n), from: 0, dec: 0, unit: ` / ${m.memo_n.toLocaleString("en-US")}`, label: "invented faces that copy a real person's photo" },
@@ -483,11 +466,12 @@ function studio() {
     const img = el("img");
     img.alt = "An invented face (not a real person)";
     box.append(img, staticLayer());
-    if (live && face.png) {
+    const file = live ? face.png : face.src;
+    if (file) {
       const a = el("a", "face-dl", ICON.dl);
-      a.href = face.png;
-      a.download = `humandit-face-${i + 1}.png`;
-      a.setAttribute("aria-label", "Download this face (PNG with its watermark)");
+      a.href = file;
+      a.download = `humandit-face-${i + 1}.${live ? "png" : "jpg"}`;
+      a.setAttribute("aria-label", "Download this face (it carries the invisible watermark)");
       box.append(a);
     }
     const cap = el("figcaption", "face-cap");
@@ -540,6 +524,32 @@ function studio() {
   tag.textContent = madeEarlier(pre.hardware);
   tag.classList.remove("live");
 
+  // saved mode: faces from the bank whose checker verdicts match the ticks (exact matches first, not the same faces
+  // again soon); the marks under each face are the checker's real verdicts, misses included
+  const recent = new Set();
+  const pick = (b, n, q, must, never) => {
+    const pool = b.faces[q] || b.faces.instant;
+    const hits = (f) => must.filter((m) => f.sees.includes(m)).length + never.filter((x) => !f.sees.includes(x)).length;
+    const want = must.length + never.length;
+    const shuffled = pool.map((f) => [Math.random(), f]).sort((x, y) => x[0] - y[0]).map((x) => x[1]);
+    const full = shuffled.filter((f) => hits(f) === want);
+    let chosen = [...full.filter((f) => !recent.has(f.src)), ...full.filter((f) => recent.has(f.src))].slice(0, n);
+    const exact = chosen.length;
+    if (chosen.length < n)
+      chosen = chosen.concat(shuffled.filter((f) => hits(f) < want).sort((x, y) => hits(y) - hits(x)).slice(0, n - exact));
+    if (recent.size > pool.length / 2) recent.clear();
+    chosen.forEach((f) => recent.add(f.src));
+    const faces = chosen.map((f) => ({
+      src: f.src,
+      sees: f.sees,
+      marks: [
+        ...must.map((m) => ({ feature: m, want: true, ok: f.sees.includes(m) })),
+        ...never.map((x) => ({ feature: x, want: false, ok: !f.sees.includes(x) })),
+      ],
+    }));
+    return { faces, exact, pool: pool.length, matching: full.length, want };
+  };
+
   let busy = false;
   button.addEventListener("click", async () => {
     if (busy) return;
@@ -553,31 +563,54 @@ function studio() {
     const prevCount = grid.dataset.count;
     placeholders(n);
     weakNote.hidden = true;
-    const making = `Making ${n} face${n > 1 ? "s" : ""}…`;
-    const stop = ticking(statusLine, engine.status.state === "ready" ? making : "Connecting to the engine…");
-    const off = engine.onStatus((s) => s.state === "busy" && stop.label(making));
+    const making = paused ? `Picking ${n} saved face${n > 1 ? "s" : ""}…` : `Making ${n} face${n > 1 ? "s" : ""}…`;
+    const stop = ticking(statusLine, making);
+    const off = () => {};
     try {
       const r = await engine.call("make", { count: n, quality: q, must, never, seed: -1 }, {
-        onQueue: (pos) => stop.label(inLine(pos)),
+        onProgress: (p) => stop.label(progressWords(p, q === "best" ? "Cleaning up: step" : "Drawing face")),
       });
       off();
       stop();
       await show(r.faces, true);
-      statusLine.innerHTML = `Made <b>${r.faces.length} face${r.faces.length > 1 ? "s" : ""}</b> in <b class="secs">0.00 s</b>, ${q === "best" ? "best quality" : "Instant mode"}.`;
+      statusLine.innerHTML = `Made <b>${r.faces.length} face${r.faces.length > 1 ? "s" : ""}</b> in <b class="secs">0.00 s</b> on ${esc(r.hardware)}, ${q === "best" ? "best quality" : "Instant mode"}.`;
       countTo($(".secs", statusLine), r.seconds, { dec: 2, dur: 900, suffix: " s" });
-      tag.textContent = `Live · ${hwLabel(r.hardware)}`;
+      tag.textContent = "Live · made on this device";
       tag.classList.add("live");
       if (r.weak?.length) {
         weakNote.textContent = `Instant mode is weak at ${r.weak.join(", ").toLowerCase()}: measured, it draws them in under half the faces. Try Best quality.`;
         weakNote.hidden = false;
       }
     } catch (err) {
-      stop();
       off();
-      grid.dataset.count = prevCount;
-      grid.replaceChildren(...previous);
-      statusLine.textContent = err.message;
-      toast(err.message);
+      const b = await bank();
+      if (!b) {
+        stop();
+        grid.dataset.count = prevCount;
+        grid.replaceChildren(...previous);
+        statusLine.textContent = err.message;
+        toast(err.message);
+        return;
+      }
+      await wait(650);
+      stop();
+      fellBack(err);
+      const r = pick(b, n, q, must, never);
+      await show(r.faces, false);
+      const kind = q === "best" ? "best-quality" : "Instant";
+      statusLine.innerHTML =
+        r.want === 0
+          ? `Picked <b>${r.faces.length}</b> of the <b>${r.pool}</b> ${kind} faces the AI made earlier.`
+          : r.exact === r.faces.length
+            ? `Picked <b>${r.faces.length}</b> of the <b>${r.matching}</b> saved ${kind} faces the checker says match.`
+            : `Only <b>${r.matching}</b> of the ${r.pool} saved ${kind} faces match everything you asked; the rest match most of it.`;
+      tag.textContent = `Saved · ${madeEarlier(b.made_on).toLowerCase()}`;
+      tag.classList.remove("live");
+      const weak = q === "instant" ? must.filter((m) => SITE.weak.includes(m)) : [];
+      if (weak.length) {
+        weakNote.textContent = `Instant mode is weak at ${weak.join(", ").toLowerCase()}: measured, it draws them in under half the faces. Try Best quality.`;
+        weakNote.hidden = false;
+      }
     } finally {
       busy = false;
       button.classList.remove("busy");
@@ -629,8 +662,8 @@ function editor() {
     vw.textContent = pct(p0);
     vwith.textContent = pct(p2);
     status.textContent = live
-      ? `Live · ${hwLabel(e.hardware)} · ${e.seconds.toFixed(2)} s`
-      : madeEarlier(SITE.preset.made_on);
+      ? `Live · ${hwLabel(e.hardware)} · Instant · ${e.seconds.toFixed(2)} s`
+      : `${madeEarlier(e.made_on || SITE.preset.made_on)}${e.of ? ` · person ${e.k + 1} of ${e.of}` : ""}`;
     current = e;
   };
 
@@ -642,11 +675,18 @@ function editor() {
     p.addEventListener("click", () => {
       $$(".pill", pills).forEach((x) => x.setAttribute("aria-checked", String(x === p)));
       if (presets.has(name) && !live) render(presets.get(name), false);
-      else ask(name, -1);
+      else ask(name, -1, true);
     });
     pills.append(p);
   };
   SITE.preset.edits.forEach((e) => pill(e.feature, false));
+  // saved mode: the bank has every feature, so every feature gets a pill
+  if (paused)
+    bank().then((b) =>
+      Object.keys(b?.edits || {})
+        .filter((f) => !presets.has(f) && b.edits[f].length)
+        .forEach((f) => pill(f, false)),
+    );
   engine.onStatus((s) => {
     if (s.state !== "ready" || pills.dataset.full) return;
     pills.dataset.full = "1";
@@ -656,20 +696,31 @@ function editor() {
   });
 
   let busy = false;
-  const ask = async (feature, seed) => {
+  const turn = {}; // saved mode: which saved person each feature is showing
+  const ask = async (feature, seed, first = false) => {
     if (busy) return;
     busy = true;
     btn.classList.add("busy");
     box.classList.remove("gone-static");
-    const stop = ticking(status, `Drawing the same person twice…`);
+    const stop = ticking(status, paused ? "Finding another saved person…" : "Drawing the same person twice…");
     try {
-      const r = await engine.call("edit", { feature_name: feature, quality: "best", seed });
+      const r = await engine.call("edit", { feature_name: feature, quality: "instant", seed });
       stop();
       await render(r, true);
     } catch (err) {
+      const list = (await bank())?.edits?.[feature];
+      if (!list?.length) {
+        stop();
+        status.textContent = err.message;
+        toast(err.message);
+        return;
+      }
+      await wait(450);
       stop();
-      status.textContent = err.message;
-      toast(err.message);
+      fellBack(err);
+      const k = first && turn[feature] == null ? 0 : ((turn[feature] ?? -1) + 1) % list.length;
+      turn[feature] = k;
+      await render({ ...list[k], feature, made_on: BANK.made_on, k, of: list.length }, false);
     } finally {
       busy = false;
       btn.classList.remove("busy");
@@ -752,8 +803,8 @@ function blender() {
     drawFrame(ca, sheet, meta, 0);
     drawFrame(cb, sheet, meta, meta.n - 1);
     status.textContent = live
-      ? `Live · ${hwLabel(m.hardware)} · ${m.n} faces in ${m.seconds.toFixed(2)} s`
-      : `${madeEarlier(m.hardware)} · best quality`;
+      ? `Live · ${hwLabel(m.hardware)} · Instant · ${m.n} faces in ${m.seconds.toFixed(2)} s`
+      : `${madeEarlier(m.hardware)} · best quality${m.of ? ` · blend ${m.k + 1} of ${m.of}` : ""}`;
     last = -1;
   };
   range.addEventListener("input", () => {
@@ -777,14 +828,17 @@ function blender() {
   }, 30);
 
   let busy = false;
+  let turn = -1;
   btn.addEventListener("click", async () => {
     if (busy) return;
     busy = true;
     btn.classList.add("busy");
-    const stop = ticking(status, "Inventing two people and 22 in between…");
+    const stop = ticking(status, paused ? "Loading another saved blend…" : "Inventing two people and 22 in between…");
     const fade = animate(null, () => (noise = Math.min(0.85, noise + 0.06)), 30);
     try {
-      const r = await engine.call("blend", { quality: "best", seed_a: -1, seed_b: -1, frames: 24 });
+      const r = await engine.call("blend", { quality: "instant", seed_a: -1, seed_b: -1, frames: 24 }, {
+        onProgress: (p) => stop.label(progressWords(p, "Drawing face")),
+      });
       stop();
       fade();
       await load(r, true);
@@ -793,11 +847,25 @@ function blender() {
         if (!noise) out();
       }, 30);
     } catch (err) {
+      const list = (await bank())?.blends;
+      if (!list?.length) {
+        stop();
+        fade();
+        noise = 0;
+        status.textContent = err.message;
+        toast(err.message);
+        return;
+      }
+      await wait(500);
       stop();
       fade();
-      noise = 0;
-      status.textContent = err.message;
-      toast(err.message);
+      fellBack(err);
+      turn = (turn + 1) % list.length;
+      await load({ ...list[turn], k: turn, of: list.length }, false);
+      const out = animate(null, () => {
+        noise = Math.max(0, noise - 0.05);
+        if (!noise) out();
+      }, 30);
     } finally {
       busy = false;
       btn.classList.remove("busy");
@@ -813,7 +881,7 @@ function race() {
   const btn = $(".btn-race");
   let stopRace = null;
 
-  const build = (data, live) => {
+  const build = (data, live, now = false) => {
     stopRace?.();
     const runs = data.runs;
     const tmax = Math.max(...runs.map((r) => r.seconds));
@@ -873,7 +941,7 @@ function race() {
         x.t.textContent = `${x.r.seconds.toFixed(2)} s`;
         if (x.gap) x.gap.style.transform = `scaleX(${x.r.fid / fmax})`;
       });
-    } else if (isOnScreen(box) || live) go();
+    } else if (isOnScreen(box) || live || now) go();
     else {
       const io = new IntersectionObserver((es) => {
         if (es.some((e) => e.isIntersecting)) {
@@ -888,15 +956,24 @@ function race() {
   build(SITE.preset.compare, false);
 
   let busy = false;
+  let turn = -1;
   btn.addEventListener("click", async () => {
     if (busy) return;
     busy = true;
     btn.classList.add("busy");
+    const was = hw.textContent;
     try {
-      const r = await engine.call("compare", { seed: -1, feature_name: "" });
+      const r = await engine.call("compare", { seed: -1, feature_name: "" }, {
+        onProgress: (p) => (hw.textContent = progressWords(p, "Racing: step")),
+      });
       build(r, true);
     } catch (err) {
-      toast(err.message);
+      hw.textContent = was;
+      const list = (await bank())?.compares;
+      if (!list?.length) return toast(err.message);
+      fellBack(err);
+      turn = (turn + 1) % list.length;
+      build(list[turn], false, true); // a saved race, replayed at the speeds it was timed at
     } finally {
       busy = false;
       btn.classList.remove("busy");
@@ -965,13 +1042,20 @@ function checker() {
     drop.classList.add("scanning");
     const t0 = performance.now();
     try {
-      const r = await engine.call("check", { image: url });
+      const r = await engine.call("check", { image: blob }, {
+        onProgress: (p) =>
+          p.phase &&
+          (body.textContent =
+            p.phase === "preparing"
+              ? "Preparing the watermark reader…"
+              : `Downloading the watermark reader (once): ${Math.round(p.got / 1e6)} of ${Math.round(p.total / 1e6)} MB…`),
+      });
       await new Promise((res) => setTimeout(res, Math.max(0, 1100 - (performance.now() - t0))));
       show(r.found);
     } catch (err) {
       if (example in saved) {
         await new Promise((res) => setTimeout(res, Math.max(0, 1100 - (performance.now() - t0))));
-        show(saved[example], "(The engine checked this example earlier; it can't be reached right now.)");
+        show(saved[example], `(Checked earlier: ${err.message})`);
       } else {
         title.textContent = "Couldn't check this picture right now.";
         body.textContent = err.message;
@@ -1043,8 +1127,143 @@ function numbers() {
   });
 }
 
+// ================================================================== live mode: the AI on this device
+const SPEEDS_URL = "assets/speeds.json";
+let SPEEDS = null;
+let YOU = null; // {name, s}: this device's measured seconds per Instant face, once known
+
+/** Faces a minute, per device measured on the maker's laptop, plus this device once it has run. */
+function ladder(root) {
+  const rows = [...(SPEEDS?.devices || []).map((d) => ({ name: d.name, sub: d.kind === "cpu" ? "processor only" : d.kind === "igpu" ? "built-in graphics" : "graphics card", s: d.instant_s }))];
+  if (YOU) rows.unshift({ name: `This device: ${YOU.name}`, sub: "measured just now", s: YOU.s, you: true });
+  const best = Math.max(...rows.map((r) => 60 / r.s));
+  root.replaceChildren(
+    ...rows.map((r) => {
+      const n = el("div", `lrow${r.you ? " you" : ""}`);
+      const perMin = 60 / r.s;
+      n.innerHTML = `<div class="lrow-name"><b>${esc(r.name)}</b><small>${esc(r.sub)}</small></div>
+        <div class="lrow-track"><i></i></div>
+        <div class="lrow-num">${perMin >= 10 ? Math.round(perMin) : perMin.toFixed(1)}<small>${r.s.toFixed(r.s < 10 ? 2 : 1)} s a face</small></div>`;
+      requestAnimationFrame(() => requestAnimationFrame(() => ($(".lrow-track i", n).style.transform = `scaleX(${Math.max(0.02, perMin / best)})`)));
+      return n;
+    }),
+  );
+}
+
+async function live() {
+  const root = document.documentElement;
+  const pill = $(".live-pill");
+  const pillText = $(".engine-text", pill);
+  const dlg = $("dialog.live");
+  const go = $(".live-go", dlg);
+  const goText = $("span", go);
+  const devName = $(".live-device-name", dlg);
+  const devNote = $(".live-device-note", dlg);
+  const size = $(".live-size", dlg);
+  const bar = $(".live-bar i", dlg);
+  const prog = $(".live-progress", dlg);
+  const progText = $(".live-progress-text", dlg);
+  const strip = $(".gpu-strip-text");
+  try {
+    YOU = JSON.parse(sessionStorage.getItem("hd-you") || "null");
+  } catch {}
+  $$(".ladder-rows").forEach((r) => ladder(r));
+
+  const onLive = () => {
+    root.classList.toggle("is-live", engine.live());
+    pill.dataset.state = engine.status.state;
+    pillText.textContent = engine.status.text;
+    if (engine.live()) {
+      $$("[data-saved]").forEach((n) => n.dataset.live && (n.textContent = n.dataset.live));
+      strip.innerHTML = `<b>Live on ${esc(engine.status.hardware)}.</b> Every face below is made on this device; nothing is uploaded.`;
+    }
+  };
+  engine.onStatus(onLive);
+  onLive();
+
+  const sizes = { core: await engine.packSize("core"), best: await engine.packSize("best") };
+  const describe = async () => {
+    const d = await engine.device();
+    const cached = await engine.cached("core");
+    if (d.gpu) {
+      devName.textContent = `Your graphics chip: ${d.label}`;
+      devNote.textContent = "It runs through WebGPU, which works on NVIDIA, AMD, Intel and Apple graphics alike.";
+    } else {
+      devName.textContent = `No WebGPU in this browser: your processor (${d.threads} thread${d.threads > 1 ? "s" : ""})`;
+      devNote.textContent =
+        "It still works, on every core, but expect seconds a face, not a fraction of one. Chrome, Edge and Safari 26 have WebGPU.";
+    }
+    if (d.mobile) devNote.textContent += " On a phone it may run out of memory: a laptop or desktop is the better place for it.";
+    size.textContent = !sizes.core
+      ? "This copy of the site has no models to run."
+      : cached
+        ? "Already on this device: it loads in seconds."
+        : `Downloads ${sizes.core} MB once and keeps it in this browser. Best quality adds ${sizes.best} MB the first time you use it.`;
+    go.disabled = !sizes.core;
+  };
+
+  const ready = () => {
+    goText.textContent = "Start making faces";
+    go.dataset.done = "1";
+    progText.textContent = YOU ? `Live on ${engine.status.hardware}: ${YOU.s.toFixed(2)} s a face.` : `Live on ${engine.status.hardware}.`;
+    bar.style.transform = "scaleX(1)";
+  };
+
+  const open = () => {
+    if (!dlg.open) dlg.showModal();
+    describe();
+    $$(".live-ladder", dlg).forEach((r) => ladder(r));
+    if (engine.live()) ready();
+  };
+  $$("[data-golive]").forEach((b) => b.addEventListener("click", open));
+  $(".live-close", dlg).addEventListener("click", () => dlg.close());
+  dlg.addEventListener("click", (e) => e.target === dlg && dlg.close());
+
+  go.addEventListener("click", async () => {
+    if (go.dataset.done) {
+      dlg.close();
+      $("#studio").scrollIntoView({ behavior: reduced ? "auto" : "smooth" });
+      return;
+    }
+    go.disabled = true;
+    prog.hidden = false;
+    progText.textContent = "Starting…";
+    try {
+      await engine.goLive((p) => {
+        bar.style.transform = `scaleX(${p.total ? p.got / p.total : 0})`;
+        progText.textContent =
+          p.phase === "preparing"
+            ? "Preparing the AI for your device (compiling it for your graphics chip)…"
+            : p.phase === "reading"
+              ? `Reading from this browser's storage: ${Math.round(p.got / 1e6)} of ${Math.round(p.total / 1e6)} MB`
+              : p.phase === "ready"
+                ? "Ready."
+                : `Downloading: ${Math.round(p.got / 1e6)} of ${Math.round(p.total / 1e6)} MB`;
+      });
+      // a speed test on this device: one face to warm up (the GPU compiles its programs), two timed
+      progText.textContent = "Timing this device: making three faces…";
+      await engine.call("make", { count: 1, quality: "instant", seed: 7 });
+      const r = await engine.call("make", { count: 2, quality: "instant", seed: 8 });
+      const d = await engine.device();
+      YOU = { name: d.gpu ? d.label : `processor, ${d.threads} threads`, s: r.seconds / 2 };
+      try {
+        sessionStorage.setItem("hd-you", JSON.stringify(YOU));
+      } catch {}
+      $$(".ladder-rows").forEach((x) => ladder(x));
+      ready();
+    } catch (err) {
+      progText.textContent = err.message;
+      goText.textContent = "Try again";
+    } finally {
+      go.disabled = false;
+    }
+  });
+}
+
 // ================================================================== start
 async function main() {
+  // saved mode: sentences that promise live drawing swap to their saved-mode wording before anything shows
+  $$("[data-saved]").forEach((n) => ((n.dataset.live = n.textContent), (n.textContent = n.dataset.saved)));
   $$("[data-split]").forEach(split);
   $$("[data-magnetic]").forEach((b) => magnetic(b));
   document.documentElement.style.setProperty("--grain", `url(${grain()})`);
@@ -1064,12 +1283,16 @@ async function main() {
   // whatever happens, the intro never stays over the page
   setTimeout(() => $(".intro").classList.add("gone"), 2500);
   try {
-    SITE = await (await fetch("assets/site.json")).json();
+    [SITE, SPEEDS] = await Promise.all([
+      fetch("assets/site.json").then((r) => r.json()),
+      fetch(SPEEDS_URL).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+    ]);
+    engine.configure({ weak: SITE.weak || [], fids: SITE.preset.compare.runs });
   } catch (err) {
     toast("This page could not load its pictures. Try reloading.");
     throw err;
   }
-  wall();
+  scenes();
   stats();
   ticker();
   // rAF sleeps in a background tab, so never wait on the intro for long
@@ -1077,7 +1300,7 @@ async function main() {
   reveal();
   const neon = $(".display .neon");
   if (neon && !reduced) setTimeout(() => neon.classList.add("flicker"), 700);
-  const sections = [portrait, how, studio, editor, blender, race, checker, numbers];
+  const sections = [portrait, how, studio, editor, blender, race, checker, numbers, live];
   for (const s of sections) {
     try {
       await s();
@@ -1085,7 +1308,7 @@ async function main() {
       console.error(`[humandit] ${s.name}:`, err);
     }
   }
-  engine.wakeSoon();
+  engine.resume();
 }
 
 main();

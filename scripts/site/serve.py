@@ -1,9 +1,9 @@
-"""Serve site/ locally the way Cloudflare Pages will: with the same Content-Security-Policy and headers.
+"""Serve site/ locally the way Cloudflare will: with the same Content-Security-Policy and isolation headers.
 
-    uv run python scripts/site/serve.py [--port 8081] [--engine http://localhost:7861]
+    uv run python scripts/site/serve.py [--port 8081] [--dir site]
 
-The policy is the one scripts/site/build_site.py writes to _headers, with the local engine allowed in place of
-Hugging Face, so scripts/site/site_check.py can prove the page works under it before it is deployed.
+The policy is the one scripts/site/build_site.py writes to _headers, so scripts/site/site_check.py can prove the page
+(and the AI running in it) works under it before it is deployed.
 """
 
 from __future__ import annotations
@@ -13,26 +13,30 @@ import functools
 import sys
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import ClassVar
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from build_site import CSP  # noqa: E402
+from build_site import CSP, ISOLATION  # noqa: E402
 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8081)
-    ap.add_argument("--engine", default="http://localhost:7861")
     ap.add_argument("--dir", default="site", help="the folder to serve: site/, or a build such as dist/site")
     a = ap.parse_args()
-    ws = a.engine.replace("http", "ws", 1)
-    csp = CSP.replace("connect-src 'self'", f"connect-src 'self' {a.engine} {ws}").replace(
-        "img-src 'self'", f"img-src 'self' {a.engine}"
-    )
 
     class Handler(SimpleHTTPRequestHandler):
+        extensions_map: ClassVar[dict[str, str]] = {
+            **SimpleHTTPRequestHandler.extensions_map,
+            ".mjs": "text/javascript",
+            ".wasm": "application/wasm",
+        }
+
         def end_headers(self):
-            self.send_header("Content-Security-Policy", csp)
+            self.send_header("Content-Security-Policy", CSP)
+            for k, v in ISOLATION.items():
+                self.send_header(k, v)
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Cache-Control", "no-store")
             super().end_headers()

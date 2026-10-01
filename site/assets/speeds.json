@@ -1,0 +1,41 @@
+{
+ "measured": "2026-10-02",
+ "devices": [
+  {
+   "kind": "gpu",
+   "name": "NVIDIA GeForce GTX 1650 Ti (2020 gaming laptop)",
+   "instant_s": 0.535,
+   "split_ms": {
+    "make": 169.3,
+    "decode": 327.4,
+    "mark": 38.5
+   },
+   "hardware": "your graphics chip (NVIDIA Turing)",
+   "best_s": 4.769
+  },
+  {
+   "kind": "igpu",
+   "name": "Intel UHD Graphics (built into the same laptop)",
+   "instant_s": 7.374,
+   "split_ms": {
+    "make": 2153.7,
+    "decode": 4636.2,
+    "mark": 584
+   },
+   "hardware": "your graphics chip (Intel Gen 9)",
+   "best_s": 63.339
+  },
+  {
+   "kind": "cpu",
+   "name": "Intel Core i7-10750H processor alone (12 threads)",
+   "instant_s": 12.662,
+   "split_ms": {
+    "make": 3742.4,
+    "decode": 8138.7,
+    "mark": 780.6
+   },
+   "hardware": "your processor (12 threads)",
+   "best_s": 118.707
+  }
+ ]
+}
