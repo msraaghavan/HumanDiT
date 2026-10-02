@@ -9,13 +9,10 @@ import {
   countTo,
   drawFrame,
   easeInOut,
-  easeOut,
   fit,
-  grain,
   isOnScreen,
   lerp,
   loadImage,
-  magnetic,
   noiseTiles,
   reduced,
   reveal,
@@ -42,8 +39,6 @@ const ICON = {
 const hwLabel = (hw) => (/^your /.test(hw) ? hw : /cpu/i.test(hw) ? "a CPU" : `a laptop GPU (${hw})`);
 const madeEarlier = (hw) => `Made earlier on ${hwLabel(hw)}`;
 
-// CSS resolves url() in a custom property against the stylesheet, so pass absolute URLs
-const FACES_URL = `url(${new URL("assets/faces.jpg", location.href).href})`;
 let SITE = null;
 let TILES = null; // canvases of static
 let STATIC = ""; // the 6-frame strip, as a CSS url()
@@ -126,58 +121,6 @@ async function instantRate(f) {
 }
 const listWords = (xs) => (xs.length < 2 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs.at(-1)}`).toLowerCase();
 
-// ================================================================== intro: the page denoises itself (once a visit)
-function intro() {
-  const box = $(".intro");
-  let seen = false;
-  try {
-    seen = sessionStorage.getItem("hd-intro") === "1";
-    sessionStorage.setItem("hd-intro", "1");
-  } catch {}
-  if (reduced || seen) {
-    box.classList.add("gone");
-    return Promise.resolve();
-  }
-  const cv = $("canvas", box);
-  const W = 192;
-  const aspect = innerWidth > 0 && innerHeight > 0 ? innerHeight / innerWidth : 0.6;
-  const H = Math.round(clamp(W * aspect, 64, 420));
-  cv.width = W;
-  cv.height = H;
-  const ctx = cv.getContext("2d");
-  const img = ctx.createImageData(W, H);
-  const order = new Float32Array(W * H).map(() => Math.random());
-  const t0 = performance.now();
-  box.classList.add("show");
-  return new Promise((resolve) => {
-    const stop = animate(null, (now) => {
-      const t = (now - t0) / 1000;
-      // static clears from the middle outwards after 0.45 s: each pixel goes when its time comes
-      const clear = clamp((t - 0.45) / 0.75);
-      const d = img.data;
-      for (let y = 0, k = 0; y < H; y++) {
-        for (let x = 0; x < W; x++, k++) {
-          const r = Math.hypot((x - W / 2) / W, (y - H / 2) / H) * 1.5;
-          const gone = clear > 0 && order[k] * 0.35 + r * 0.65 < easeOut(clear) * 1.1;
-          const v = Math.random() * 255;
-          const i = k * 4;
-          d[i] = v * 0.86;
-          d[i + 1] = v * 0.93;
-          d[i + 2] = Math.min(255, v * 1.05 + 20);
-          d[i + 3] = gone ? 0 : 150;
-        }
-      }
-      ctx.putImageData(img, 0, 0);
-      if (t > 0.9) box.classList.add("done");
-      if (t > 1.25) {
-        stop();
-        box.classList.add("gone");
-        resolve();
-      }
-    }, 30);
-  });
-}
-
 // ================================================================== chrome: nav, progress, active section
 function chrome() {
   const pill = $(".live-pill");
@@ -196,43 +139,17 @@ function polish() {
     { rootMargin: "0px 0px -15% 0px" },
   );
   $$("[data-reveal-head], .how-copy").forEach((h) => heads.observe(h));
-  if (reduced || !matchMedia("(pointer: fine)").matches) return;
-  $$(".panel").forEach((p) => {
-    p.addEventListener("pointermove", (e) => {
-      const r = p.getBoundingClientRect();
-      p.style.setProperty("--gx", `${e.clientX - r.left}px`);
-      p.style.setProperty("--gy", `${e.clientY - r.top}px`);
-    });
-    p.addEventListener("pointerenter", () => p.classList.add("lit"));
-    p.addEventListener("pointerleave", () => p.classList.remove("lit"));
-  });
-  const hero = $(".hero");
-  const frame = $(".portrait-frame");
-  hero.addEventListener("pointermove", (e) => {
-    const r = frame.getBoundingClientRect();
-    const x = clamp((e.clientX - (r.left + r.width / 2)) / innerWidth, -0.5, 0.5);
-    const y = clamp((e.clientY - (r.top + r.height / 2)) / innerHeight, -0.5, 0.5);
-    frame.style.setProperty("--ry", `${x * 10}deg`);
-    frame.style.setProperty("--rx", `${-y * 8}deg`);
-  });
-  hero.addEventListener("pointerleave", () => {
-    frame.style.setProperty("--ry", "0deg");
-    frame.style.setProperty("--rx", "0deg");
-  });
 }
 
 // ================================================================== hero
 function scenes() {
-  // each scene is a different street of the same rainy town: where the fire, the lamp and the big windows stand
+  // two streets of the same rainy town: where the fire, the lamp and the tall house stand (its windows just lit;
+  // the photo-real faces stay out of the pixel art)
   const LOOK = {
-    hero: { seed: 11, fire: 0.66, lamp: 0.535, faces: 0.9, moon: 0.62 },
-    interlude: { seed: 23, fire: 0.34, lamp: 0.74, faces: 0.56, moon: 0.2, street: 0.84, tall: 0.78 },
+    interlude: { seed: 23, fire: 0.34, lamp: 0.74, faces: 0.56, moon: 0.2, street: 0.8, tall: 0.86 },
     footer: { seed: 5, fire: 0.7, lamp: 0.18, faces: 0.42, moon: 0.62, street: 0.82 },
   };
-  const made = $$("[data-scene]").map((n) => nightScene(n, LOOK[n.dataset.scene] || {}));
-  loadImage(new URL(`assets/${SITE.faces.file}`, location.href).href)
-    .then((im) => made.forEach((m) => m.faces(im)))
-    .catch(() => {});
+  $$("[data-scene]").forEach((n) => nightScene(n, LOOK[n.dataset.scene] || {}));
 }
 
 function stats() {
@@ -241,11 +158,11 @@ function stats() {
   const cpu = SPEEDS?.devices?.find((d) => d.kind === "cpu");
   const rows = [
     gpu
-      ? { to: gpu.instant_s, from: cpu?.instant_s || 10, dec: 2, unit: " s", label: `a face, made in this page on a 2020 laptop's GPU${cpu ? ` (${cpu.instant_s.toFixed(0)} s on its processor alone)` : ""}` }
-      : { to: SITE.speed.student_ms / 1000, from: SITE.speed.teacher_s, dec: 2, unit: " s", label: "per face in Instant mode, on a laptop GPU" },
-    { to: m.fid_after, from: m.fid_before, dec: 2, unit: "", label: `realism gap, lower is better (the first version: ${m.fid_before.toFixed(1)})` },
-    { to: m.n_attributes, from: 0, dec: 0, unit: "", label: "features you can ask for, or rule out" },
-    { to: Math.round(m.memorised * m.memo_n), from: 0, dec: 0, unit: ` / ${m.memo_n.toLocaleString("en-US")}`, label: "invented faces that copy a real person's photo" },
+      ? { to: gpu.instant_s, from: cpu?.instant_s || 10, dec: 2, unit: " s", label: "a face, in this page, on a 2020 laptop GPU" }
+      : { to: SITE.speed.student_ms / 1000, from: SITE.speed.teacher_s, dec: 2, unit: " s", label: "a face on a laptop GPU" },
+    { to: m.fid_after, from: m.fid_before, dec: 2, unit: "", label: `realism gap (FID), down from ${m.fid_before.toFixed(0)} in the first version` },
+    { to: m.n_attributes, from: 0, dec: 0, unit: "", label: "features to ask for or rule out" },
+    { to: Math.round(m.memorised * m.memo_n), from: 0, dec: 0, unit: ` / ${m.memo_n.toLocaleString("en-US")}`, label: "faces that copy a real photo" },
   ];
   const dl = $(".stats");
   rows.forEach((r) => {
@@ -256,65 +173,67 @@ function stats() {
   });
 }
 
-async function portrait() {
-  const cv = $(".portrait-canvas");
-  const ctx = fit(cv, 1.5, 720);
-  const heroes = SITE.preset.hero;
-  const sheets = [];
-  const step = $(".hud-step b");
-  const left = $(".hud-noise b");
-  const meter = $(".hud-meter i");
-  sheets[0] = await loadImage(heroes[0].src);
-  heroes.slice(1).forEach((h, i) => loadImage(h.src).then((im) => (sheets[i + 1] = im)).catch(() => {}));
-  const FRAME = 85; // ms per drawing step
-  const HOLD = 2600;
-  const OUT = 700;
-  const cycle = heroes[0].n * FRAME + HOLD + OUT;
-  const t0 = performance.now();
-  let lastKey = "";
-  const show = (now) => {
-    const t = reduced ? heroes[0].n * FRAME + 10 : now - t0;
-    let k = Math.floor(t / cycle) % heroes.length;
-    if (!sheets[k]) k = 0;
-    const h = heroes[k];
-    const u = t % cycle;
-    const i = Math.min(h.n - 1, Math.floor(u / FRAME));
-    const after = i + 1 < h.n ? h.noise_left[i + 1] : 0; // static left once this step is done
-    let noise = u < h.n * FRAME ? after : 0;
-    if (u > h.n * FRAME + HOLD) noise = easeInOut((u - h.n * FRAME - HOLD) / OUT);
-    const key = `${k}:${i}:${noise.toFixed(3)}`;
-    if (key === lastKey) return;
-    lastKey = key;
-    drawFrame(ctx, sheets[k], h, i);
-    if (noise > 0.001) {
-      ctx.globalAlpha = noise;
-      ctx.drawImage(TILES[Math.floor(now / 70) % TILES.length], 0, 0, cv.width, cv.height);
-      ctx.globalAlpha = 1;
-    }
-    step.textContent = String(i + 1).padStart(2, "0");
-    left.textContent = pct(noise);
-    meter.style.transform = `scaleX(${1 - noise})`;
-  };
-  animate(cv, show, 30);
+// ================================================================== hero: faces the AI made, in the order it made them
+async function mosaic() {
+  const grid = $(".mosaic-grid");
+  const b = await bank();
+  const pool = (b?.faces?.best || []).filter((f) => !f.asked).map((f) => f.src);
+  if (!pool.length) return;
+  const N = 9;
+  const tiles = pool.slice(0, N).map((src, i) => {
+    const t = el("div", "tile");
+    t.style.setProperty("--i", i);
+    const img = el("img");
+    img.alt = "";
+    img.src = src;
+    t.append(img, staticLayer());
+    grid.append(t);
+    return { t, img };
+  });
+  if (reduced) return;
+  // every few seconds one face dissolves into static and the next face the AI made develops in its place
+  const order = [4, 0, 8, 2, 6, 1, 7, 3, 5];
+  let next = N;
+  let k = 0;
+  let last = performance.now();
+  animate(grid, (now) => {
+    if (now - last < 2400) return;
+    last = now;
+    const tile = tiles[order[k++ % N]];
+    loadImage(pool[next++ % pool.length])
+      .then((im) => {
+        tile.t.classList.add("noisy");
+        setTimeout(() => {
+          tile.img.src = im.src;
+          tile.t.classList.remove("noisy");
+        }, 420);
+      })
+      .catch(() => {});
+  }, 4);
 }
 
-function ticker() {
-  const track = $(".ticker-track");
-  const f = SITE.faces;
-  const rows = Math.ceil(f.n / f.cols);
-  track.style.setProperty("--sheet", FACES_URL);
-  track.style.setProperty("--bs", `${f.cols * 100}% ${rows * 100}%`);
-  const words = ["Not a real person", "Invented by AI", "Nobody here exists", "Watermarked", "Measured, not claimed"];
-  const make = () =>
-    words.map((w, j) => {
-      const k = (j * 13 + 7) % f.n;
-      const item = el("span", `ticker-item${j % 2 ? " fill" : ""}`);
-      const face = el("span", "ticker-face");
-      face.style.setProperty("--bp", `${((k % f.cols) / (f.cols - 1)) * 100}% ${(Math.floor(k / f.cols) / (rows - 1)) * 100}%`);
-      item.append(document.createTextNode(w), face);
-      return item;
-    });
-  track.append(...make(), ...make());
+// ================================================================== the demo: a recording of the site in use
+function demo() {
+  const dlg = $("dialog.demo");
+  const video = $(".demo-video", dlg);
+  const buttons = $$("[data-demo]");
+  // no recording in this copy of the site: no button
+  fetch(video.getAttribute("src"), { method: "HEAD" })
+    .then((r) => !r.ok && buttons.forEach((b) => (b.hidden = true)))
+    .catch(() => buttons.forEach((b) => (b.hidden = true)));
+  buttons.forEach((b) =>
+    b.addEventListener("click", () => {
+      dlg.showModal();
+      video.play().catch(() => {});
+    }),
+  );
+  const close = () => {
+    video.pause();
+    dlg.close();
+  };
+  $(".demo-close", dlg).addEventListener("click", close);
+  dlg.addEventListener("click", (e) => e.target === dlg && close());
+  dlg.addEventListener("close", () => video.pause());
 }
 
 // ================================================================== how it works: scroll scrubs the drawing
@@ -691,7 +610,8 @@ function editor() {
     p.setAttribute("aria-checked", String(name === current.feature));
     p.addEventListener("click", () => {
       $$(".pill", pills).forEach((x) => x.setAttribute("aria-checked", String(x === p)));
-      if (presets.has(name) && !live) render(presets.get(name), false);
+      // a feature with a saved example shows it until live mode is on; live, every press draws someone new
+      if (presets.has(name) && !engine.live()) render(presets.get(name), false);
       else ask(name, -1, true);
     });
     pills.append(p);
@@ -1355,22 +1275,12 @@ async function main() {
   // saved mode: sentences that promise live drawing swap to their saved-mode wording before anything shows
   $$("[data-saved]").forEach((n) => ((n.dataset.live = n.textContent), (n.textContent = n.dataset.saved)));
   $$("[data-split]").forEach(split);
-  $$("[data-magnetic]").forEach((b) => magnetic(b));
-  document.documentElement.style.setProperty("--grain", `url(${grain()})`);
   STATIC = staticStrip(128);
   document.documentElement.style.setProperty("--static", `url(${STATIC})`);
   TILES = noiseTiles(6, 256);
   chrome();
   polish();
-  let introDone;
-  try {
-    introDone = intro();
-  } catch (err) {
-    console.error("[humandit] intro:", err);
-    introDone = Promise.resolve();
-  }
-  // whatever happens, the intro never stays over the page
-  setTimeout(() => $(".intro").classList.add("gone"), 2500);
+  demo();
   try {
     [SITE, SPEEDS] = await Promise.all([
       fetch("assets/site.json").then((r) => r.json()),
@@ -1383,13 +1293,8 @@ async function main() {
   }
   scenes();
   stats();
-  ticker();
-  // rAF sleeps in a background tab, so never wait on the intro for long
-  await Promise.race([introDone, new Promise((r) => setTimeout(r, 1600))]);
   reveal();
-  const neon = $(".display .neon");
-  if (neon && !reduced) setTimeout(() => neon.classList.add("flicker"), 700);
-  const sections = [portrait, how, studio, editor, race, checker, numbers, live];
+  const sections = [mosaic, how, studio, editor, race, checker, numbers, live];
   for (const s of sections) {
     try {
       await s();

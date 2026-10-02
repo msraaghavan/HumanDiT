@@ -21,7 +21,7 @@ def test_page_references_exist():
     vendored = re.search(r'from "\.\./\.\./(vendor/[^"]+)"', worker).group(1)
     assert (SITE / vendored).exists()
     assert (SITE / "vendor" / "ort" / "ort-wasm-simd-threaded.asyncify.wasm.gz").exists()
-    for f in ("archivo", "inter", "jetbrains-mono"):  # served with the page: no third-party requests
+    for f in ("inter", "jetbrains-mono"):  # served with the page: no third-party requests
         assert (SITE / "fonts" / f"{f}.woff2").exists()
     assert "fonts.googleapis.com" not in html
 

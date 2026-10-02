@@ -33,10 +33,11 @@ def main() -> None:
         page = b.new_page(viewport={"width": 1200, "height": 630}, device_scale_factor=1)
         page.add_init_script("sessionStorage.setItem('hd-intro', '1')")  # no intro in the picture
         page.goto(a.url, wait_until="load")
-        # wait for the words to land and the portrait to finish a face
-        wait_js(page, "document.querySelector('.hud-step b')?.textContent === '25'")
-        wait_js(page, "document.querySelector('.hero-scene canvas')?.width > 0")
-        page.wait_for_timeout(1500)  # rain falling, fire lit
+        wait_js(
+            page,
+            "[...document.querySelectorAll('.mosaic .tile img')].filter(i => i.complete && i.naturalWidth).length === 9",
+        )
+        page.wait_for_timeout(1800)  # the words and the faces have landed
         page.evaluate(  # the CSP blocks injected <style>; element styles are fine
             "document.querySelectorAll('.scroll-cue, .live-pill').forEach((e) => (e.style.visibility = 'hidden'))"
         )

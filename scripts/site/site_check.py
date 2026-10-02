@@ -3,7 +3,7 @@
     uv run python scripts/site/serve.py --port 8081 &             # the page and its models, under the production CSP
     uv run python scripts/site/site_check.py [--url http://localhost:8081/] [--fps] [--cpu]
 
-Checks: no JavaScript errors and no missing files; the pixel-art town draws; every section starts from its saved
+Checks: no JavaScript errors and no missing files; the AI's faces fill the hero and the pixel-art town draws; every section starts from its saved
 results; the AI check reads both examples on this device; the live dialog names the graphics chip and says where the
 AI will be stored; live mode downloads, prepares and times itself through the page's own buttons, and a button pressed
 meanwhile says to wait and then runs live; each tool answers live (faces that honour a ticked feature, a feature
@@ -81,27 +81,39 @@ def main() -> None:
 
         # ------------------------------------------------------------ the page before live mode
         check("no page header: it opens on the hero", page.locator("body > header, .nav").count() == 0)
-        check("hero: the pixel-art town is drawing", page.evaluate(LIT, ".hero-scene canvas"))
-        size = page.evaluate(
-            "(() => { const c = document.querySelector('.hero-scene canvas'); return [c.width, c.height, c.style.width] })()"
-        )
         check(
-            "hero: the town is scaled by a whole number",
-            True,
-            f"{size[0]} x {size[1]} art pixels shown at {size[2]}",
+            "hero: 9 faces made by the AI",
+            page.evaluate(
+                "[...document.querySelectorAll('.mosaic .tile img')].filter(i => i.complete && i.naturalWidth).length"
+            )
+            == 9,
         )
-        check("hero: portrait is drawing", page.evaluate(LIT, ".portrait-canvas"))
         check("hero: 4 measured numbers", page.locator(".stat").count() == 4)
+        page.locator("[data-demo]").click()
+        page.wait_for_timeout(2500)
+        played = page.evaluate(
+            "(() => { const v = document.querySelector('.demo-video'); return [v.currentTime, v.duration] })()"
+        )
+        check("watch a demo: the recording plays", played[0] > 0.5, f"{played[0]:.1f} of {played[1]:.0f} s")
+        page.locator(".demo-close").click()
         check(
             "live mode starts off: saved results",
             page.get_attribute(".live-pill", "data-state") == "saved",
             page.inner_text(".live-pill .engine-text"),
         )
-        page.evaluate("document.querySelector('.interlude').scrollIntoView()")
+        page.evaluate("document.querySelector('.band').scrollIntoView({block: 'center'})")
         page.wait_for_timeout(1500)
-        check("interlude: the town draws full screen", page.evaluate(LIT, ".interlude canvas"))
+        check("the pixel-art town draws in its band", page.evaluate(LIT, ".band canvas"))
+        size = page.evaluate(
+            "(() => { const c = document.querySelector('.band canvas'); return [c.width, c.height, c.style.width] })()"
+        )
+        check(
+            "the town is scaled by a whole number",
+            True,
+            f"{size[0]} x {size[1]} art pixels shown at {size[2]}",
+        )
         if a.fps:
-            fps["interlude (town)"] = page.evaluate(FPS_JS, 3000)
+            fps["town band"] = page.evaluate(FPS_JS, 3000)
         page.evaluate("document.querySelector('.how').scrollIntoView()")
         top, h = page.evaluate(
             "[document.querySelector('.how').offsetTop, document.querySelector('.how').offsetHeight]"
