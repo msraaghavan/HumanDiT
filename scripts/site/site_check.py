@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import json
 import re
 import sys
 import time
@@ -82,20 +83,17 @@ def main() -> None:
         # ------------------------------------------------------------ the page before live mode
         check("no page header: it opens on the hero", page.locator("body > header, .nav").count() == 0)
         check(
-            "hero: 9 faces made by the AI",
-            page.evaluate(
-                "[...document.querySelectorAll('.mosaic .tile img')].filter(i => i.complete && i.naturalWidth).length"
-            )
-            == 9,
+            "hero: a large face, drawn from the AI's drafts",
+            page.evaluate(LIT, ".stage-canvas"),
+            page.inner_text(".stage-who"),
         )
         check("hero: 4 measured numbers", page.locator(".stat").count() == 4)
-        page.locator("[data-demo]").click()
-        page.wait_for_timeout(2500)
-        played = page.evaluate(
-            "(() => { const v = document.querySelector('.demo-video'); return [v.currentTime, v.duration] })()"
+        before = page.inner_text(".stage-who")
+        page.locator(".stage-next").click()
+        wait_js(
+            page, f"document.querySelector('.stage-who').textContent !== {json.dumps(before)}", timeout=20_000
         )
-        check("watch a demo: the recording plays", played[0] > 0.5, f"{played[0]:.1f} of {played[1]:.0f} s")
-        page.locator(".demo-close").click()
+        check("hero: another person on request", True, page.inner_text(".stage-who"))
         check(
             "live mode starts off: saved results",
             page.get_attribute(".live-pill", "data-state") == "saved",
@@ -223,6 +221,14 @@ def main() -> None:
             f"{time.monotonic() - t0:.0f} s; {page.inner_text('.live-size')}",
         )
         check("this device joins the ladder", page.locator(".ladder .lrow.you").count() == 1)
+        page.evaluate("window.scrollTo(0, 0)")
+        page.wait_for_timeout(600)
+        page.locator(".stage-next").click()
+        wait_js(
+            page, "/^Made just now/.test(document.querySelector('.stage-who').textContent)", timeout=120_000
+        )
+        check("hero: another person, made live on this device", True, page.inner_text(".stage-who"))
+        page.locator("#studio").scroll_into_view_if_needed()
 
         # ------------------------------------------------------------ live: a feature Instant can't draw -> Best quality
         page.locator(".chip", has_text="Glasses").click()
@@ -247,13 +253,37 @@ def main() -> None:
         page.locator(".chip", has_text="Goatee").click()
         page.locator(".chip", has_text="Goatee").click()  # back to "any"
 
-        # ------------------------------------------------------------ live: change one thing
-        page.locator("#edit").scroll_into_view_if_needed()
-        page.locator(".btn-edit").click()
+        # ------------------------------------------------------------ cancel: 8 Best-quality faces, stopped midway
+        page.locator('.seg[data-name="count"] button[data-value="8"]').click()
+        page.locator('.seg[data-name="quality"] button[data-value="best"]').click()
+        page.locator(".btn-make").click()
+        page.wait_for_timeout(2500)
+        label = page.inner_text(".btn-make")
+        t1 = time.monotonic()
+        page.locator(".btn-make").click()
         wait_js(
-            page, "document.querySelector('.edit-status').textContent.startsWith('Live')", timeout=180_000
+            page, "/Cancelled/.test(document.querySelector('.results-status').textContent)", timeout=30_000
         )
-        check("change one thing: another person, live", True, page.inner_text(".edit-status"))
+        stopped = time.monotonic() - t1
+        check(
+            "cancel: the button cancels a generation under way",
+            "Cancel" in label and stopped < 5,
+            f"stopped in {stopped:.1f} s",
+        )
+        page.locator('.seg[data-name="quality"] button[data-value="instant"]').click()
+        page.locator('.seg[data-name="count"] button[data-value="4"]').click()
+        t1 = time.monotonic()
+        page.locator(".btn-make").click()
+        wait_js(
+            page,
+            "/^Made 4 faces/.test(document.querySelector('.results-status').textContent)",
+            timeout=60_000,
+        )
+        check(
+            "cancel: the AI is free again at once",
+            time.monotonic() - t1 < 15,
+            page.inner_text(".results-status")[:80],
+        )
 
         # ------------------------------------------------------------ live: race on this GPU
         page.locator("#speed").scroll_into_view_if_needed()
@@ -286,6 +316,23 @@ def main() -> None:
         found = sorted(set(EMOJI.findall(text)))
         check("no emoji", not found, " ".join(found))
 
+        # ------------------------------------------------------------ reload: smooth, and nothing loads by itself
+        page.reload(wait_until="load")
+        page.wait_for_timeout(5000)
+        check(
+            "reload: the AI doesn't load by itself",
+            page.get_attribute(".live-pill", "data-state") == "saved",
+            page.inner_text(".live-pill .engine-text"),
+        )
+        if a.fps:
+            fps["hero after a reload"] = page.evaluate(FPS_JS, 3000)
+        page.locator("#studio").scroll_into_view_if_needed()
+        page.locator(".btn-make").click()
+        page.wait_for_timeout(500)
+        said = page.inner_text(".results-status")
+        wait_js(page, "document.querySelector('.results-tag').classList.contains('live')", timeout=300_000)
+        check("reload: the first press starts it from storage", "Please wait" in said, said[:80])
+
         # ------------------------------------------------------------ remove the AI from this computer
         page.locator(".footer-meta [data-store]").click()
         page.wait_for_timeout(800)
@@ -310,8 +357,21 @@ def main() -> None:
         phone.on("pageerror", lambda e: errors.append(str(e)))
         phone.goto(a.url, wait_until="load")
         phone.wait_for_timeout(3000)
-        over = phone.evaluate("document.documentElement.scrollWidth - innerWidth")
-        check("phone: no sideways scrolling", over <= 0, f"{over}px")
+        # a phone widens its layout to fit anything too wide, so compare with the screen, not with the layout
+        over = phone.evaluate(
+            "Math.max(innerWidth, document.documentElement.scrollWidth) - visualViewport.width"
+        )
+        check("phone: nothing wider than the screen", over <= 0, f"{over:.0f}px")
+        phone.locator(".gpu-strip").click()
+        phone.wait_for_timeout(1200)
+        box = phone.evaluate(
+            "(() => { const r = document.querySelector('dialog.live').getBoundingClientRect(); return [r.left, r.right, visualViewport.width] })()"
+        )
+        check(
+            "phone: the live dialog fits the screen",
+            box[0] >= 0 and box[1] <= box[2],
+            f"{box[0]:.0f} to {box[1]:.0f} of {box[2]:.0f}px",
+        )
         phone.close()
 
         real = [e for e in errors if "favicon" not in e and "Failed to load resource" not in e]

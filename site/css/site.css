@@ -303,18 +303,6 @@ legend {
   background: rgba(255, 255, 255, 0.07);
 }
 
-[data-demo] svg {
-  width: 13px;
-  height: 13px;
-  fill: currentColor;
-  stroke: none;
-}
-
-.btn-note {
-  color: var(--mute);
-  font: 500 12px/1 var(--mono);
-}
-
 .btn-wide {
   width: 100%;
 }
@@ -374,6 +362,7 @@ legend {
 /* ------------------------------------------------------------------ hero */
 .hero {
   position: relative;
+  overflow-x: clip; /* the glow behind the face may spread, but never widens the page */
   display: flex;
   flex-direction: column;
   max-width: var(--wrap);
@@ -402,7 +391,7 @@ legend {
 .hero-grid {
   flex: 1;
   display: grid;
-  grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
+  grid-template-columns: minmax(0, 0.82fr) minmax(0, 1.18fr);
   align-items: center;
   gap: clamp(32px, 5vw, 72px);
   padding: clamp(36px, 6vh, 72px) 0;
@@ -483,53 +472,147 @@ legend {
   display: none;
 }
 
-.mosaic {
+.stage {
+  position: relative;
   justify-self: end;
-  width: min(100%, 540px);
+  width: min(100%, calc(100svh - 260px), 720px);
+  min-width: min(100%, 420px);
   margin: 0;
 }
 
-.mosaic-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
+/* the face's own colours, tiny and smoothed, as a soft light behind it */
+.stage-glow {
+  position: absolute;
+  inset: -16% -16% 4%;
+  z-index: 0;
+  pointer-events: none;
+  -webkit-mask-image: radial-gradient(closest-side, #000 30%, transparent);
+  mask-image: radial-gradient(closest-side, #000 30%, transparent);
 }
 
-.tile {
-  position: relative;
-  aspect-ratio: 1;
-  overflow: hidden;
-  border-radius: 10px;
-  background: var(--panel);
-}
-
-.tile img {
+.stage-amb {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
-  object-fit: cover;
-}
-
-.tile .static {
   opacity: 0;
-  transition: opacity 0.4s var(--ease-io);
+  transition: opacity 1.6s var(--ease-io);
 }
 
-.tile .static i {
-  animation-play-state: paused;
+.stage-amb.on {
+  opacity: 0.42;
 }
 
-.tile.noisy .static {
-  opacity: 1;
+.stage-frame {
+  position: relative;
+  z-index: 1;
+  aspect-ratio: 1;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--panel);
+  box-shadow: 0 40px 120px -40px rgba(0, 0, 0, 0.85);
+  cursor: pointer;
 }
 
-.tile.noisy .static i {
-  animation-play-state: running;
+.stage-canvas {
+  width: 100%;
+  height: 100%;
+  transition: transform 0.45s var(--ease-io);
 }
 
-.mosaic-note {
-  margin-top: 12px;
+/* while a face holds, it drifts closer, slowly */
+.stage-frame.drift .stage-canvas {
+  transform: scale(1.045);
+  transition: transform 7s linear;
+}
+
+.stage-tag {
+  position: absolute;
+  left: 14px;
+  top: 14px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(11, 12, 15, 0.72);
+  color: #fff;
+  font: 500 12px/1 var(--mono);
+  letter-spacing: 0.02em;
+}
+
+.stage-cap {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 14px;
+}
+
+.stage-who {
+  min-height: 1.4em;
   color: var(--mute);
-  font-size: 12.5px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.stage-next {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  gap: 10px;
+  height: 40px;
+  padding: 0 16px 0 10px;
+  border: 1px solid var(--line-2);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  font: 550 14px/1 var(--body);
+  transition: background-color 0.2s, border-color 0.2s;
+}
+
+.stage-next:hover {
+  border-color: rgba(255, 255, 255, 0.24);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.ring {
+  width: 22px;
+  height: 22px;
+  transform: rotate(-90deg);
+}
+
+.ring circle {
+  fill: none;
+  stroke-width: 2.4;
+}
+
+.ring .track {
+  stroke: rgba(255, 255, 255, 0.14);
+}
+
+.ring .fill {
+  stroke: var(--accent);
+  stroke-linecap: round;
+  stroke-dasharray: 56.55;
+  stroke-dashoffset: 56.55;
+}
+
+/* the ring fills while the face holds: when it closes, the next person forms */
+.stage-next.timing .ring .fill {
+  animation: ring 6.5s linear forwards;
+}
+
+.stage-next.busy .ring {
+  animation: spin 0.9s linear infinite;
+}
+
+.stage-next.busy .ring .fill {
+  stroke-dashoffset: 38;
+}
+
+@keyframes ring {
+  to { stroke-dashoffset: 0; }
 }
 
 .stats {
@@ -1001,11 +1084,12 @@ legend {
 
 .results-tag,
 .tag {
-  flex: none;
+  flex: 0 1 auto;
+  max-width: 100%;
   padding: 5px 9px;
   border: 1px solid var(--line);
-  border-radius: 999px;
-  font: 500 11px/1 var(--mono);
+  border-radius: 12px;
+  font: 500 11px/1.35 var(--mono);
   color: var(--dim);
   letter-spacing: 0.04em;
 }
@@ -1203,195 +1287,6 @@ legend {
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--dim);
-}
-
-/* ------------------------------------------------------------------ change one thing */
-.edit-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1.15fr) minmax(280px, 0.85fr);
-  gap: clamp(20px, 3vw, 36px);
-  align-items: start;
-}
-
-.compare {
-  position: relative;
-  aspect-ratio: 1;
-  max-width: 620px;
-  overflow: hidden;
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  background: #121318;
-  cursor: ew-resize;
-  touch-action: pan-y;
-  user-select: none;
-  --p: 50%;
-}
-
-.compare img {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  pointer-events: none;
-}
-
-.compare-b-wrap {
-  position: absolute;
-  inset: 0;
-  clip-path: inset(0 0 0 var(--p));
-}
-
-.compare-line {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 0;
-  width: 2px;
-  margin-left: -1px;
-  background: var(--grad);
-  transform: translateX(var(--px, 0));
-  pointer-events: none;
-}
-
-.compare-knob {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 44px;
-  height: 44px;
-  margin: -22px 0 0 -22px;
-  border: 1px solid var(--cyan);
-  border-radius: 50%;
-  background: rgba(11, 12, 15, 0.85);
-}
-
-.compare-knob::before,
-.compare-knob::after {
-  content: "";
-  position: absolute;
-  top: 50%;
-  width: 7px;
-  height: 7px;
-  margin-top: -4px;
-  border: solid #fff;
-  border-width: 0 0 2px 2px;
-}
-
-.compare-knob::before {
-  left: 11px;
-  transform: rotate(45deg);
-}
-
-.compare-knob::after {
-  right: 11px;
-  transform: rotate(-135deg);
-}
-
-.compare-lbl {
-  position: absolute;
-  top: 14px;
-  padding: 6px 10px;
-  border-radius: 8px;
-  background: rgba(11, 12, 15, 0.8);
-  font: 500 11px/1 var(--mono);
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--dim);
-  pointer-events: none;
-}
-
-.compare-lbl.l { left: 14px; }
-.compare-lbl.r { right: 14px; color: var(--cyan); }
-
-.compare.swap img {
-  animation: swap 0.7s var(--ease);
-}
-
-@keyframes swap {
-  from { opacity: 0; transform: scale(1.04); }
-}
-
-.pills {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 7px;
-  margin-bottom: 26px;
-}
-
-.pill {
-  height: 36px;
-  padding: 0 14px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: rgba(20, 21, 27, 0.85);
-  font-size: 14px;
-  transition:
-    border-color 0.25s,
-    background-color 0.25s,
-    color 0.25s;
-}
-
-.pill:hover {
-  border-color: var(--line-2);
-}
-
-.pill[aria-checked="true"] {
-  border-color: var(--cyan);
-  background: rgba(242, 166, 90, 0.098);
-  color: #fff;
-}
-
-.pill.live-only {
-  border-style: dashed;
-}
-
-.checker {
-  margin-bottom: 22px;
-}
-
-.meter-row {
-  display: grid;
-  grid-template-columns: 64px 1fr 48px;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 10px;
-  font-size: 13.5px;
-  color: var(--dim);
-}
-
-.meter-row b {
-  text-align: right;
-  font: 600 13px/1 var(--mono);
-  color: #fff;
-  font-variant-numeric: tabular-nums;
-}
-
-.meter {
-  position: relative;
-  height: 8px;
-  overflow: hidden;
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.072);
-}
-
-.meter i {
-  position: absolute;
-  inset: 0;
-  border-radius: 8px;
-  background: var(--grad);
-  transform: scaleX(0);
-  transform-origin: left;
-  transition: transform 1s var(--ease);
-}
-
-.meter .m-without {
-  background: linear-gradient(90deg, #6b6d76, #9b9da6);
-}
-
-.edit-status {
-  margin-top: 12px;
-  min-height: 21px;
 }
 
 /* ------------------------------------------------------------------ speed race */
@@ -2546,20 +2441,79 @@ dialog.live[open] .live-box {
   margin: 0;
 }
 
+/* the browser flag that moves a laptop onto its graphics card, ready to copy */
+.flag {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.flag code {
+  padding: 3px 7px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: rgba(5, 5, 7, 0.6);
+  color: #fff;
+  font: 500 12px/1.4 var(--mono);
+  overflow-wrap: anywhere;
+}
+
+.flag-copy {
+  padding: 3px 9px;
+  border: 1px solid var(--line-2);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text);
+  font: 550 12px/1.4 var(--body);
+}
+
+/* a phone without WebGPU: no live-mode invitations it can't take up */
+.no-live .live-pill-go,
+.no-live .gpu-strip-go,
+.no-live .nudge,
+.no-live .ladder-go {
+  display: none;
+}
+
+/* a button that cancels while the AI works */
+.btn.cancelling {
+  border-color: rgba(248, 113, 113, 0.5);
+  background: rgba(248, 113, 113, 0.1);
+  color: #fecaca;
+}
+
+.btn.cancelling svg {
+  width: 13px;
+  height: 13px;
+}
+
 /* ------------------------------------------------------------------ responsive */
 @media (max-width: 980px) {
   .hero-grid,
   .how-grid,
   .studio-grid,
-  .edit-grid,
   .check-grid,
   .numbers-grid {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .portrait {
-    justify-self: start;
-    width: min(100%, 440px);
+  /* phones and tablets: the face first, as large as the screen allows */
+  .hero {
+    min-height: 0;
+  }
+
+  .hero-grid {
+    gap: 28px;
+    padding-top: 22px;
+  }
+
+  .stage {
+    order: -1;
+    justify-self: center;
+    width: min(100%, 560px);
+    min-width: 0;
   }
 
   .stats {
@@ -2600,14 +2554,17 @@ dialog.live[open] .live-box {
     position: static;
   }
 
-  .compare {
-    max-width: none;
-  }
 }
 
 @media (max-width: 640px) {
   .live-pill .engine-text {
     max-width: 120px;
+  }
+
+  /* on a phone the pill is one small button until the AI is starting or running */
+  .live-pill[data-state="saved"] .engine-dot,
+  .live-pill[data-state="saved"] .engine-text {
+    display: none;
   }
 
   .gpu-strip-go {

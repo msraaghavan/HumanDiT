@@ -32,9 +32,9 @@ def test_saved_results_are_complete():
     assert len(site["scoreboard"]) == 8
     pre = site["preset"]
     files = [h["src"] for h in pre["hero"]] + [f["src"] for f in pre["studio"]["faces"]]
-    files += [e[k] for e in pre["edits"] for k in ("without", "choice", "with")]
     files += [r["img"] for r in pre["compare"]["runs"]]
-    assert "blend" not in pre and "blends" not in json.loads((SITE / "assets" / "bank.json").read_text())
+    bank = json.loads((SITE / "assets" / "bank.json").read_text())
+    assert not {"blend", "edits"} & set(pre) and not {"blends", "edits"} & set(bank)  # both removed from the site
     assert all((SITE / f).exists() for f in files), [f for f in files if not (SITE / f).exists()]
     for h in pre["hero"]:  # a static amount per step, from all static down towards none
         assert len(h["noise_left"]) == h["n"] == 25

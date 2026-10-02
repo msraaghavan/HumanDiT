@@ -4,8 +4,8 @@
     uv run python scripts/site/build_bank.py                  # about half an hour on a GTX 1650 Ti
 
 Until a visitor switches live mode on (the AI downloading to and running on their own device), the page answers
-from this bank: "Make faces" picks faces whose checker verdicts match what was ticked, "Try
-another person" moves to another saved result, "Race again" to another saved race. The bank
+from this bank: "Make faces" picks faces whose checker verdicts match what was ticked, "Race
+again" moves to another saved race. The bank
 is uncurated: every output of every call is kept, made by the same endpoints the live page calls, with fixed seeds.
 Nothing is selected by eye.
 """
@@ -29,7 +29,6 @@ OUT = SITE / "assets" / "bank"
 PLAN = {
     # faces: (quality, feature asked for or None, faces) -- unconditional faces cover "must not" requests
     "faces": [("instant", None, 240), ("best", None, 120), ("instant", "*", 16), ("best", "*", 8)],
-    "edit_seeds": (21, 22, 23, 24, 25, 26),
     "compare_seeds": (51, 52, 53, 54, 55),
 }
 SEED0 = {"instant": 100_000, "best": 200_000}  # face seeds: a fixed range per quality, one call of 8 per seed
@@ -83,22 +82,6 @@ def main() -> None:
             )
         print(f"faces {quality:7s} {feat!s:11s} {len(faces[quality]):4d}  {r['seconds']:.2f} s", flush=True)
 
-    edits = {f: [] for f in features}
-    for seed in PLAN["edit_seeds"]:
-        for feat in features:
-            r = c.predict(feature_name=feat, quality="best", seed=seed, api_name="/edit")
-            slug = feat.lower().replace(" ", "_")
-            edits[feat].append(
-                {
-                    "seed": r["seed"],
-                    "checker": r["checker"],
-                    "seconds": r["seconds"],
-                    "without": save(r["without"], OUT / f"edit_{slug}_{seed}_without", 86),
-                    "with": save(r["with"], OUT / f"edit_{slug}_{seed}_with", 86),
-                }
-            )
-        print(f"edits seed {seed} done", flush=True)
-
     compares = []
     for s in PLAN["compare_seeds"]:
         r = c.predict(seed=s, feature_name="", api_name="/compare")
@@ -118,13 +101,12 @@ def main() -> None:
         "features": features,
         "faces": faces,
         "sec_per_face": {q: round(t / max(1, n), 3) for q, (t, n) in seconds.items()},
-        "edits": edits,
         "compares": compares,
     }
     (SITE / "assets" / "bank.json").write_text(json.dumps(bank, separators=(",", ":")))
     files = [f for f in OUT.rglob("*") if f.is_file()]
     print(
-        f"bank: {len(faces['instant'])} + {len(faces['best'])} faces, {sum(len(v) for v in edits.values())} edits, "
+        f"bank: {len(faces['instant'])} + {len(faces['best'])} faces, "
         f"{len(compares)} races; {len(files)} files, "
         f"{sum(f.stat().st_size for f in files) / 2**20:.1f} MB; {(time.time() - t_start) / 60:.1f} min"
     )

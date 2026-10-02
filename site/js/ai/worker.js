@@ -21,6 +21,16 @@ let SECRET = null;
 const S = {}; // ONNX Runtime sessions, by file key
 
 const post = (msg) => self.postMessage(msg);
+
+// cancelling: a "cancel" message (handled at once, not queued) moves the epoch on; the job under way stops at its next
+// step and any job queued before the cancel never starts. ONNX Runtime can't stop inside one model call, so the
+// longest wait is one step: a fraction of a second on a graphics chip.
+let EPOCH = 0;
+let RUNNING = 0; // the epoch of the job under way
+let downloads = null; // aborts the download under way
+const alive = () => {
+  if (EPOCH !== RUNNING) throw new Error("CANCELLED");
+};
 const now = () => performance.now();
 const T = (type, data, dims) => new ort.Tensor(type, data, dims);
 
@@ -75,10 +85,12 @@ async function loadPacks({ packs }, progress) {
     progress({ phase, key, got, total, toFetch });
   };
   for (const key of keys) {
+    downloads = new AbortController();
     const bytes = await load(BASE, M, key, (n) => {
       got += n;
       tick(have[key] ? "reading" : "downloading", key);
-    });
+    }, downloads.signal);
+    alive();
     tick("preparing", key, true);
     S[key] = await ort.InferenceSession.create(bytes, {
       executionProviders: [EP === "webgpu" ? "webgpu" : "wasm"],
@@ -107,6 +119,7 @@ async function oneStep(noise, attrs, n, onFace) {
       attrs: T("int64", attrs.slice(i * K, (i + 1) * K), [1, K]),
     });
     z.set(r.out.data, i * L);
+    alive();
     onFace?.(i + 1);
   }
   return z;
@@ -159,6 +172,7 @@ async function teacher(noise, attrs, n, steps, cfg, onStep) {
       }
       x[k] += dt * (x[k] - xc) * inv; // v = (x - x̂) / t, then one Euler step towards t = 0
     }
+    alive();
     onStep?.(i + 1);
   }
   return x;
@@ -324,10 +338,17 @@ async function make({ count = 4, quality = "instant", must = [], never = [], see
   const tGen = now() - t;
   const imgs = [];
   t = now();
-  for (let i = 0; i < n; i++) imgs.push(await decode(z, i));
+  for (let i = 0; i < n; i++) {
+    imgs.push(await decode(z, i));
+    alive();
+    progress({ k: i + 1, of: n, what: "finish" });
+  }
   const tDec = now() - t;
   t = now();
-  for (const im of imgs) await mark(im);
+  for (const im of imgs) {
+    await mark(im);
+    alive();
+  }
   const tWm = now() - t;
   const asked = choices.map((c, j) => [M.model_features[j], c]).filter(([, c]) => c !== "any");
   const askedText = asked.length ? `{${asked.map(([k, c]) => `'${k}': '${c}'`).join(", ")}}` : "unconditional";
@@ -356,42 +377,6 @@ async function make({ count = 4, quality = "instant", must = [], never = [], see
   };
 }
 
-async function edit({ feature_name = "Glasses", quality = "instant", seed = -1 }, progress) {
-  const j = M.features.indexOf(feature_name);
-  if (j < 0) throw new Error(`Unknown feature: ${feature_name}`);
-  seed = seedOr(seed);
-  const attrs = new BigInt64Array(2 * K);
-  attrs[j] = BigInt(M.tokens.no);
-  attrs[K + j] = BigInt(M.tokens.yes);
-  // the same person twice, without and with the feature; if the checker doesn't see the change, try another person
-  const t = now();
-  let z = null;
-  let best = -Infinity;
-  let used = seed;
-  for (let r = 0; r < TRIES[quality]; r++) {
-    const s = r ? (seed + r * 1_000_003) % 2 ** 31 : seed;
-    const one = randn(s, L);
-    const noise = new Float32Array(2 * L);
-    noise.set(one);
-    noise.set(one, L);
-    const of = quality === "best" ? M.steps : 2;
-    const zz = await sample(quality, noise, attrs, 2, M.cfg.edit, (k) => progress({ k, of, what: "edit", retry: r, redraw: r ? 1 : 0 }));
-    const [p0, p1] = [probs(zz, 0)[j], probs(zz, 1)[j]];
-    const c = p0 < 0.5 && p1 > 0.5 ? Infinity : Math.log(1e-6 + 1 - p0) + Math.log(1e-6 + p1);
-    if (c > best) [best, z, used] = [c, zz, s];
-    if (c === Infinity) break;
-  }
-  const sec = (now() - t) / 1000;
-  const out = {};
-  const checker = [];
-  for (const [i, key, state] of [[0, "without", "absent"], [1, "with", "present"]]) {
-    out[key] = await png(await mark(await decode(z, i)), `${MODE[quality]}; seed ${used}; ${M.model_features[j]} ${state}; cfg ${M.cfg.edit}; made ${where()}`);
-    checker.push(r3(probs(z, i)[j]));
-  }
-  // [without, (no middle picture), with]: the shape the saved results use
-  return { ...out, seed: used, feature: M.features[j], checker: [checker[0], null, checker[1]], seconds: r3(sec), hardware: HW, quality };
-}
-
 async function compare({ seed = -1, feature_name = "" }, progress) {
   seed = seedOr(seed);
   const noise = randn(seed, L);
@@ -412,6 +397,7 @@ async function compare({ seed = -1, feature_name = "" }, progress) {
     done += steps;
     progress({ k: done, of: total, what: "compare" });
     out.push({ label: q === "instant" ? "Instant" : `${steps} steps`, steps, seconds: +sec.toFixed(4), img: await jpeg([await mark(await decode(z, 0))], 1, 0.9) });
+    alive();
   }
   return { seed, runs: out, hardware: HW };
 }
@@ -448,15 +434,23 @@ async function check({ image }) {
   return { found: schemaOk && flips <= M.watermark.max_flips, size: [w, h], flips };
 }
 
-const ENDPOINTS = { make, edit, compare, check };
+const ENDPOINTS = { make, compare, check };
 
 // ------------------------------------------------------------------ messages: one job at a time, in order
 let queue = Promise.resolve();
 self.onmessage = (e) => {
   const { id, op, args } = e.data;
+  if (op === "cancel") {
+    EPOCH++;
+    downloads?.abort();
+    return;
+  }
+  const mine = EPOCH;
   queue = queue.then(async () => {
     const progress = (p) => post({ id, progress: p });
+    RUNNING = mine;
     try {
+      alive(); // cancelled while it waited its turn
       let result;
       if (op === "init") result = await init(args);
       else if (op === "load") result = await loadPacks(args, progress);

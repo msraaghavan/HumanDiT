@@ -29,13 +29,13 @@ def main() -> None:
     ap.add_argument("--url", default="http://localhost:8081/")
     a = ap.parse_args()
     with sync_playwright() as p:
-        b = p.chromium.launch(channel="msedge")
+        b = p.chromium.launch(channel="msedge", args=["--force_high_performance_gpu"])  # no built-in-graphics note
         page = b.new_page(viewport={"width": 1200, "height": 630}, device_scale_factor=1)
         page.add_init_script("sessionStorage.setItem('hd-intro', '1')")  # no intro in the picture
         page.goto(a.url, wait_until="load")
         wait_js(
             page,
-            "[...document.querySelectorAll('.mosaic .tile img')].filter(i => i.complete && i.naturalWidth).length === 9",
+            "document.querySelector('.stage-next').classList.contains('timing')",  # the first face has formed
         )
         page.wait_for_timeout(1800)  # the words and the faces have landed
         page.evaluate(  # the CSP blocks injected <style>; element styles are fine

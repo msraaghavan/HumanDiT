@@ -22,8 +22,6 @@ from gradio_client import Client
 ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / "site" / "assets"
 HERO_SEEDS = (4, 0, 1, 2)  # the showreel's hero seed first, then the next seeds in order (not picked by eye)
-EDIT_FEATURES = ("Glasses", "Smile", "Grey hair", "Blond hair", "Bangs", "Hat")
-EDIT_SEED = 4
 STUDIO_SEED = 42
 COMPARE_SEED = 11
 # the project's story in measured FID-50k (clean): (eval file, plain name, technical name, what the site uses it for)
@@ -106,21 +104,6 @@ def main() -> None:
     }
     print(f"make x8 instant: {r['seconds']} s")
 
-    edits = []
-    for feat in EDIT_FEATURES:
-        r = c.predict(feature_name=feat, quality="best", seed=EDIT_SEED, api_name="/edit")
-        slug = feat.lower().replace(" ", "_")
-        edits.append(
-            {
-                "feature": r["feature"],
-                "seed": r["seed"],
-                "checker": r["checker"],
-                "seconds": r["seconds"],
-                **{k: to_jpeg(r[k], pre / f"edit_{slug}_{k}") for k in ("without", "choice", "with")},
-            }
-        )
-        print(f"edit {feat}: checker {r['checker']}")
-
     r = c.predict(seed=COMPARE_SEED, feature_name="", api_name="/compare")
     compare = {
         "seed": r["seed"],
@@ -185,7 +168,6 @@ def main() -> None:
             "made_on": info["hardware"],
             "hero": hero,
             "studio": studio,
-            "edits": edits,
             "compare": compare,
             "check": check,
         },

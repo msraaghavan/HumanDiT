@@ -9,7 +9,7 @@
   <meta name="color-scheme" content="dark">
   <meta property="og:type" content="website">
   <meta property="og:title" content="HumanDiT: faces of people who don't exist">
-  <meta property="og:description" content="An AI that invents realistic faces from scratch, running on your own GPU in the browser. Choose features, change one thing about a person, check the hidden watermark.">
+  <meta property="og:description" content="An AI that invents realistic faces from scratch, running on your own GPU in the browser. Choose features, race Instant against Best quality, check the hidden watermark.">
   <meta property="og:image" content="assets/og.jpg">
   <meta name="twitter:card" content="summary_large_image">
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
@@ -33,11 +33,10 @@
       <a class="wordmark" href="#top" aria-label="HumanDiT, top of the page"><span class="wordmark-dot" aria-hidden="true"></span>HumanDiT</a>
       <div class="hero-grid">
         <div class="hero-copy">
-          <h1 class="display" data-split>Faces of people <span class="soft">who don't exist.</span></h1>
-          <p class="lede" data-reveal style="--d:.35s">An AI that invents realistic faces from scratch, with the features you choose. It runs on your own graphics chip, right in this page.</p>
+          <h1 class="display" data-split>This person <span class="soft">does not exist.</span></h1>
+          <p class="lede" data-reveal style="--d:.35s">Neither does anyone else on this page. An AI invents every face from random static, with the features you choose, on your own graphics chip, right here in the browser.</p>
           <div class="cta" data-reveal style="--d:.45s">
-            <a class="btn btn-primary" href="#studio"><span>Make a face</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a>
-            <button class="btn btn-ghost" type="button" data-demo><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l10.5-6.5z"/></svg><span>Watch a demo</span><small class="btn-note">2 min</small></button>
+            <a class="btn btn-primary" href="#studio"><span>Make your own</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a>
           </div>
           <button class="gpu-strip" type="button" data-golive data-reveal style="--d:.55s">
             <span class="gpu-strip-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/><rect x="9.5" y="9.5" width="5" height="5" rx=".8"/></svg></span>
@@ -45,9 +44,16 @@
             <span class="gpu-strip-go">Switch on<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></span>
           </button>
         </div>
-        <figure class="mosaic" data-reveal style="--d:.2s">
-          <div class="mosaic-grid" aria-label="Faces made by this AI. None of these people exist."></div>
-          <figcaption class="mosaic-note">Made by this AI, shown in the order it made them. None of these people exist.</figcaption>
+        <figure class="stage" data-reveal style="--d:.15s">
+          <div class="stage-glow" aria-hidden="true"><canvas class="stage-amb" width="64" height="64"></canvas><canvas class="stage-amb" width="64" height="64"></canvas></div>
+          <div class="stage-frame" role="button" tabindex="0" aria-label="A face made by this AI. Press for another person.">
+            <canvas class="stage-canvas" width="768" height="768"></canvas>
+            <span class="stage-tag">Not a real person</span>
+          </div>
+          <figcaption class="stage-cap">
+            <span class="stage-who" aria-live="polite"></span>
+            <button class="stage-next" type="button"><svg class="ring" viewBox="0 0 22 22" aria-hidden="true"><circle class="track" cx="11" cy="11" r="9"/><circle class="fill" cx="11" cy="11" r="9"/></svg><span>Another person</span></button>
+          </figcaption>
         </figure>
       </div>
       <dl class="stats" data-reveal style="--d:.65s"></dl>
@@ -135,40 +141,10 @@
       </div>
     </section>
 
-    <!-- ============================================================ 02 change one thing -->
-    <section class="section edit" id="edit">
-      <header class="section-head" data-reveal-head>
-        <p class="kicker"><span class="num">02</span>Change one thing</p>
-        <h2 class="h2" data-split>Same person. One change.</h2>
-        <p class="section-lede" data-reveal>The same invented person, drawn twice from the same starting static: once without a feature and once with it. Drag the line to compare.</p>
-      </header>
-      <div class="edit-grid">
-        <div class="compare" data-reveal tabindex="0" role="slider" aria-label="Compare without and with the feature" aria-valuemin="0" aria-valuemax="100" aria-valuenow="50">
-          <img class="compare-a" alt="">
-          <div class="compare-b-wrap"><img class="compare-b" alt=""></div>
-          <div class="compare-line" aria-hidden="true"><span class="compare-knob"></span></div>
-          <span class="compare-lbl l">Without</span><span class="compare-lbl r">With</span>
-        </div>
-        <div class="panel edit-side" data-reveal>
-          <p class="field-title">Feature</p>
-          <div class="pills edit-pills" role="radiogroup" aria-label="Feature to change"></div>
-          <div class="checker">
-            <p class="field-title">The checker's reading</p>
-            <div class="meter-row"><span>Without</span><span class="meter"><i class="m-without"></i></span><b class="v-without">-</b></div>
-            <div class="meter-row"><span>With</span><span class="meter"><i class="m-with"></i></span><b class="v-with">-</b></div>
-            <p class="small">How sure the checker is that the feature is there.</p>
-          </div>
-          <button class="btn btn-ghost btn-wide btn-edit" type="button">Try another person</button>
-          <p class="small edit-status" aria-live="polite"></p>
-          <button class="nudge" type="button" data-golive><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/><rect x="9.5" y="9.5" width="5" height="5" rx=".8"/></svg><span>Make these live on your GPU</span></button>
-        </div>
-      </div>
-    </section>
-
-    <!-- ============================================================ 03 speed -->
+    <!-- ============================================================ 02 speed -->
     <section class="section speed" id="speed">
       <header class="section-head" data-reveal-head>
-        <p class="kicker"><span class="num">03</span>Instant or best</p>
+        <p class="kicker"><span class="num">02</span>Instant or best</p>
         <h2 class="h2" data-split>One step, or twenty-five?</h2>
         <p class="section-lede" data-reveal>The same starting static, drawn four ways. Instant mode is a second AI trained to jump straight to the answer. Best quality takes more clean-up steps: slower, but closer to a real photo. With live mode on, the race runs on your own graphics chip.</p>
       </header>
@@ -192,10 +168,10 @@
       </div>
     </section>
 
-    <!-- ============================================================ 04 is it AI-made? -->
+    <!-- ============================================================ 03 is it AI-made? -->
     <section class="section check" id="check">
       <header class="section-head" data-reveal-head>
-        <p class="kicker"><span class="num">04</span>Is it AI-made?</p>
+        <p class="kicker"><span class="num">03</span>Is it AI-made?</p>
         <h2 class="h2" data-split>A signature you can't see</h2>
         <p class="section-lede" data-reveal >Every face this site makes carries an invisible watermark. It survives resizing and compression. Drop any picture here, or try the two examples: the check runs on your device, and the picture never leaves it.</p>
       </header>
@@ -218,10 +194,10 @@
       </div>
     </section>
 
-    <!-- ============================================================ 05 the numbers -->
+    <!-- ============================================================ 04 the numbers -->
     <section class="section numbers" id="numbers">
       <header class="section-head" data-reveal-head>
-        <p class="kicker"><span class="num">05</span>For engineers</p>
+        <p class="kicker"><span class="num">04</span>For engineers</p>
         <h2 class="h2" data-split>What's under the hood</h2>
         <p class="section-lede" data-reveal>A 183-million-parameter diffusion transformer that draws in the feature space of a frozen vision model, distilled into a one-step generator. Every number below is measured.</p>
       </header>
@@ -276,12 +252,6 @@
     <div class="footer-town"><div class="scene" data-scene="footer" aria-hidden="true"></div></div>
   </footer>
 
-  <dialog class="demo" aria-label="Demo: HumanDiT in use">
-    <div class="demo-box">
-      <video class="demo-video" src="assets/demo.mp4" poster="assets/demo_poster.jpg" playsinline controls preload="none"></video>
-      <button class="demo-close" type="button" aria-label="Close the demo"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
-    </div>
-  </dialog>
   <dialog class="live" aria-labelledby="live-title">
     <div class="live-box">
       <button class="live-close" type="button" aria-label="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>

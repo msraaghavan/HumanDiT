@@ -3,13 +3,18 @@
     uv run --extra demo python scripts/site/export_web_models.py   # once: site/models/ (not committed)
     uv run python scripts/site/build_site.py [--github https://github.com/USER/REPO]
 
-Then deploy the folder, after logging in to Cloudflare yourself (`npx wrangler login`):
+Then deploy the folder, after logging in to Cloudflare yourself (`npx wrangler login`). As a Cloudflare Pages
+project, at https://<project>.pages.dev (no account name in the address):
+
+    uv run python scripts/site/build_site.py --pages --out dist/pages
+    cd dist && npx wrangler pages deploy pages --project-name humandit --branch main
+
+or as a Worker, at https://<worker>.<account>.workers.dev (the folder then carries its own wrangler.jsonc and an
+.assetsignore, so that config is never published as a page):
 
     npx wrangler deploy --cwd dist/site
 
-The folder carries its own wrangler.jsonc (a Worker named humandit that serves these static files; Cloudflare Pages
-is now part of Workers) and an .assetsignore, so that config is never published as a page. There is no server: the
-models run in each visitor's browser, on their graphics chip or processor.
+There is no server: the models run in each visitor's browser, on their graphics chip or processor.
 
 Also writes Cloudflare's _headers: a content security policy that lets the page load nothing from anywhere else,
 cross-origin isolation (the AI's multi-threaded processor fallback needs it), and long caching for the versioned
@@ -77,6 +82,7 @@ def main() -> None:
     ap.add_argument("--worker", default="humandit", help="the Cloudflare Worker's name (its URL)")
     ap.add_argument("--out", default="dist/site")
     ap.add_argument("--no-models", action="store_true", help="build without site/models (saved results only)")
+    ap.add_argument("--pages", action="store_true", help="for Cloudflare Pages: no Worker config in the folder")
     a = ap.parse_args()
     out = ROOT / a.out
     if not (a.no_models or (SITE / "models" / "manifest.json").exists()):
@@ -91,9 +97,10 @@ def main() -> None:
     cfg = re.sub(r"links: \{[^}]*\}", "links: " + json.dumps(links), cfg)
     (out / "config.js").write_text(cfg, encoding="utf-8")
     (out / "_headers").write_text(HEADERS, encoding="utf-8")
-    worker = {"name": a.worker, "compatibility_date": "2026-09-26", "assets": {"directory": "."}}
-    (out / "wrangler.jsonc").write_text(json.dumps(worker, indent=2) + "\n", encoding="utf-8")
-    (out / ".assetsignore").write_text("wrangler.jsonc\n.wrangler\n.assetsignore\n", encoding="utf-8")
+    if not a.pages:
+        worker = {"name": a.worker, "compatibility_date": "2026-09-26", "assets": {"directory": "."}}
+        (out / "wrangler.jsonc").write_text(json.dumps(worker, indent=2) + "\n", encoding="utf-8")
+        (out / ".assetsignore").write_text("wrangler.jsonc\n.wrangler\n.assetsignore\n", encoding="utf-8")
     missing = [f for f in ("assets/site.json", "assets/og.jpg", "assets/faces.jpg") if not (out / f).exists()]
     if missing:
         raise SystemExit(f"missing {missing}: run scripts/site/build_assets.py and og_image.py first")

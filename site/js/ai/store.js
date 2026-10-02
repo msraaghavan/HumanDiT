@@ -38,7 +38,7 @@ async function sha256(bytes) {
  * The bytes of one model file. onBytes(n) reports bytes as they arrive (cached parts count at once).
  * Four parts download at a time.
  */
-export async function load(base, man, key, onBytes) {
+export async function load(base, man, key, onBytes, signal) {
   const info = man.files[key];
   const urls = partUrls(base, man, key);
   let cache = null;
@@ -48,18 +48,21 @@ export async function load(base, man, key, onBytes) {
   const out = new Uint8Array(info.bytes);
   const PART = 24 * 2 ** 20;
   let next = 0;
+  let fetched = false;
   const one = async (i) => {
     const url = urls[i];
     let res = cache && (await cache.match(url));
     const fromCache = !!res;
+    if (!fromCache) fetched = true;
     if (!res) {
-      res = await fetch(url);
+      res = await fetch(url, { signal });
       if (!res.ok) throw new Error(`Download failed (${res.status}) for ${key}`);
     }
     const reader = res.body.getReader();
     let at = i * PART;
     const chunks = [];
     for (;;) {
+      if (signal?.aborted) throw new Error("CANCELLED");
       const { done, value } = await reader.read();
       if (done) break;
       out.set(value, at);
@@ -77,9 +80,17 @@ export async function load(base, man, key, onBytes) {
     while (next < urls.length) await one(next++);
   };
   await Promise.all(Array.from({ length: Math.min(4, urls.length) }, worker));
-  if ((await sha256(out)) !== info.sha256) {
-    if (cache) await Promise.all(urls.map((u) => cache.delete(u)));
-    throw new Error(`The ${key} file arrived damaged; it was deleted, so trying again downloads a fresh copy.`);
+  // checked once, when it arrives: a stored note of the hash skips re-reading hundreds of MB on every later visit
+  const note = `${base}${man.version}/${key}.verified`;
+  const known = !fetched && cache && (await (await cache.match(note))?.text()) === info.sha256;
+  if (!known) {
+    if ((await sha256(out)) !== info.sha256) {
+      if (cache) await Promise.all([...urls, note].map((u) => cache.delete(u)));
+      throw new Error(`The ${key} file arrived damaged; it was deleted, so trying again downloads a fresh copy.`);
+    }
+    try {
+      await cache?.put(note, new Response(info.sha256));
+    } catch {}
   }
   return out;
 }

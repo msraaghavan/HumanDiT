@@ -9,6 +9,7 @@ import {
   countTo,
   drawFrame,
   easeInOut,
+  easeOut,
   fit,
   isOnScreen,
   lerp,
@@ -93,7 +94,9 @@ const progressWords = (p, doing) =>
     ? p.phase === "preparing"
       ? "Preparing the Best quality model for your device…"
       : `Downloading the Best quality model (once): ${Math.round(p.got / 1e6)} of ${Math.round(p.total / 1e6)} MB…`
-    : p.redraw
+    : p.what === "finish"
+      ? `Finishing: face ${p.k} of ${p.of} (decoding and watermarking)…`
+      : p.redraw
       ? `The checker sent ${p.redraw} face${p.redraw > 1 ? "s" : ""} back · redrawing: ${p.k} of ${p.of}…`
       : `${doing} ${p.k} of ${p.of}…`;
 
@@ -112,6 +115,20 @@ function pleaseWait(stop, then) {
   });
   return off;
 }
+
+/** While the AI works, a button reads "Cancel" (and cancels); returns restore(). */
+function asCancel(button) {
+  const was = button.innerHTML;
+  button.classList.add("cancelling");
+  button.innerHTML = `<span>Cancel</span>${ICON.no}`;
+  button.setAttribute("aria-label", "Cancel");
+  return () => {
+    button.classList.remove("cancelling");
+    button.innerHTML = was;
+    button.removeAttribute("aria-label");
+  };
+}
+const cancelled = (err) => err?.message === "Cancelled.";
 
 /** How often Instant mode drew a feature when asked, from the saved faces (e.g. "0 of 16"), or "". */
 async function instantRate(f) {
@@ -173,67 +190,169 @@ function stats() {
   });
 }
 
-// ================================================================== hero: faces the AI made, in the order it made them
-async function mosaic() {
-  const grid = $(".mosaic-grid");
-  const b = await bank();
-  const pool = (b?.faces?.best || []).filter((f) => !f.asked).map((f) => f.src);
-  if (!pool.length) return;
-  const N = 9;
-  const tiles = pool.slice(0, N).map((src, i) => {
-    const t = el("div", "tile");
-    t.style.setProperty("--i", i);
-    const img = el("img");
-    img.alt = "";
-    img.src = src;
-    t.append(img, staticLayer());
-    grid.append(t);
-    return { t, img };
-  });
-  if (reduced) return;
-  // every few seconds one face dissolves into static and the next face the AI made develops in its place
-  const order = [4, 0, 8, 2, 6, 1, 7, 3, 5];
-  let next = N;
-  let k = 0;
-  let last = performance.now();
-  animate(grid, (now) => {
-    if (now - last < 2400) return;
-    last = now;
-    const tile = tiles[order[k++ % N]];
-    loadImage(pool[next++ % pool.length])
-      .then((im) => {
-        tile.t.classList.add("noisy");
-        setTimeout(() => {
-          tile.img.src = im.src;
-          tile.t.classList.remove("noisy");
-        }, 420);
-      })
-      .catch(() => {});
-  }, 4);
-}
-
-// ================================================================== the demo: a recording of the site in use
-function demo() {
-  const dlg = $("dialog.demo");
-  const video = $(".demo-video", dlg);
-  const buttons = $$("[data-demo]");
-  // no recording in this copy of the site: no button
-  fetch(video.getAttribute("src"), { method: "HEAD" })
-    .then((r) => !r.ok && buttons.forEach((b) => (b.hidden = true)))
-    .catch(() => buttons.forEach((b) => (b.hidden = true)));
-  buttons.forEach((b) =>
-    b.addEventListener("click", () => {
-      dlg.showModal();
-      video.play().catch(() => {});
-    }),
-  );
-  const close = () => {
-    video.pause();
-    dlg.close();
+// ================================================================== hero: one large face, forming from static
+// Inspired by thispersondoesnotexist.com: one person, large, and another on request. Each saved face plays the AI's
+// real drafts (assets/hero.json: its clean-picture guess at each of 25 steps) from static to the finished face; in live
+// mode, "Another person" makes a new face on the visitor's own device instead.
+async function stage() {
+  const fig = $(".stage");
+  const cv = $(".stage-canvas");
+  const who = $(".stage-who");
+  const next = $(".stage-next");
+  const amb = $$(".stage-amb");
+  const data = await fetch("assets/hero.json")
+    .then((r) => (r.ok ? r.json() : null))
+    .catch(() => null);
+  const faces = data?.faces?.length ? data.faces : SITE.preset.hero;
+  const madeOn = data?.made_on || SITE.preset.made_on;
+  const sheets = new Map();
+  const sheet = (k) => {
+    if (!sheets.has(k)) sheets.set(k, loadImage(faces[k].src).catch(() => null));
+    return sheets.get(k);
   };
-  $(".demo-close", dlg).addEventListener("click", close);
-  dlg.addEventListener("click", (e) => e.target === dlg && close());
-  dlg.addEventListener("close", () => video.pause());
+  let dirty = true;
+  let ctx = fit(cv, 2, 1100);
+  new ResizeObserver(() => {
+    ctx = fit(cv, 2, 1100);
+    dirty = true;
+  }).observe(cv);
+
+  // what is on screen: a sheet of drafts (saved) or one picture (live), and where the animation is
+  let shown = { img: await sheet(0), meta: faces[0], live: false };
+  let k = 0;
+  let phase = reduced ? "hold" : "draw"; // out (to static), draw (drafts), reveal (live: static clears), hold
+  let t0 = performance.now();
+  let touched = false; // after a press, no more automatic changes
+  let incoming = null; // the next face, while static covers the old one
+  const DRAW = 2200;
+  const OUT = 420;
+  const REVEAL = 700;
+  const HOLD = 6500;
+  sheet(1);
+
+  const caption = (f, live) => {
+    who.textContent = live
+      ? `Made just now on ${f.hardware}, in ${f.seconds.toFixed(2)} s.`
+      : `Drawn by this AI from seed ${f.seed}, step by step, on a ${madeOn}.`;
+  };
+  caption(faces[0], false);
+
+  // the soft colour behind the face: the face itself, tiny and smoothed, cross-faded when the face changes
+  let ambOn = 0;
+  const ambient = (src, meta) => {
+    const c = amb[1 - ambOn];
+    const a = c.getContext("2d");
+    a.clearRect(0, 0, c.width, c.height);
+    a.filter = "blur(3px)";
+    if (meta) a.drawImage(src, ((meta.n - 1) % meta.cols) * meta.size, Math.floor((meta.n - 1) / meta.cols) * meta.size, meta.size, meta.size, 0, 0, c.width, c.height);
+    else a.drawImage(src, 0, 0, c.width, c.height);
+    amb[ambOn].classList.remove("on");
+    c.classList.add("on");
+    ambOn = 1 - ambOn;
+  };
+
+  const noise = (alpha, now) => {
+    if (alpha <= 0.002) return;
+    ctx.globalAlpha = alpha;
+    ctx.drawImage(TILES[Math.floor(now / 70) % TILES.length], 0, 0, cv.width, cv.height);
+    ctx.globalAlpha = 1;
+  };
+  const final = (s) => (s.meta ? drawFrame(ctx, s.img, s.meta, s.meta.n - 1) : ctx.drawImage(s.img, 0, 0, cv.width, cv.height));
+
+  const frame = $(".stage-frame");
+  const go = async (live) => {
+    // static covers the face at once; the next one is fetched (or made) meanwhile
+    phase = "out";
+    frame.classList.remove("drift");
+    t0 = performance.now();
+    next.classList.remove("timing");
+    if (live) {
+      who.textContent = engine.starting() ? "Please wait until the AI is running…" : "Making a new face on this device…";
+      const r = await engine.call("make", { count: 1, quality: "instant", seed: -1 });
+      const img = await loadImage(r.faces[0].png);
+      incoming = { img, meta: null, live: true, info: { hardware: r.hardware, seconds: r.seconds } };
+    } else {
+      let img = null;
+      for (let tries = 0; !img && tries < faces.length; tries++) {
+        k = (k + 1) % faces.length;
+        img = await sheet(k);
+      }
+      sheet((k + 1) % faces.length);
+      incoming = img ? { img, meta: faces[k], live: false } : shown; // nothing loads: the same face comes back
+    }
+  };
+
+  const press = async () => {
+    touched = true;
+    if (phase === "out") return;
+    engine.prepare();
+    const live = engine.live() || engine.starting();
+    next.classList.add("busy");
+    try {
+      await go(live);
+    } catch (err) {
+      // live failed or was cancelled: the next saved face instead
+      if (err?.message !== "Cancelled.") toast(`${err.message} Showing a face the AI made earlier.`);
+      await go(false);
+    } finally {
+      next.classList.remove("busy");
+    }
+  };
+  next.addEventListener("click", press);
+  frame.addEventListener("click", press);
+  frame.addEventListener("keydown", (e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), press()));
+
+  animate(fig, (now) => {
+    const t = now - t0;
+    if (phase === "out") {
+      final(shown);
+      noise(easeOut(clamp(t / OUT)), now);
+      if (t >= OUT && incoming) {
+        shown = incoming;
+        incoming = null;
+        phase = shown.live ? "reveal" : "draw";
+        t0 = now;
+        if (shown.live) caption(shown.info, true);
+        else caption(shown.meta, false);
+      }
+      return;
+    }
+    if (phase === "draw") {
+      const m = shown.meta;
+      const u = clamp(t / DRAW);
+      const f = easeInOut(u) * (m.n - 1);
+      const i = Math.floor(f);
+      drawFrame(ctx, shown.img, m, i);
+      if (f - i > 0.001) drawFrame(ctx, shown.img, m, i + 1, f - i);
+      const left = lerp(m.noise_left[i], m.noise_left[Math.min(m.n - 1, i + 1)], f - i);
+      noise(left * (1 - clamp((u - 0.82) / 0.18)), now);
+      if (u >= 1) {
+        phase = "hold";
+        t0 = now;
+        if (!reduced) frame.classList.add("drift");
+        ambient(shown.img, m);
+        if (!touched) next.classList.add("timing");
+      }
+      return;
+    }
+    if (phase === "reveal") {
+      final(shown);
+      noise(1 - easeOut(clamp(t / REVEAL)), now);
+      if (t >= REVEAL) {
+        phase = "hold";
+        t0 = now;
+        if (!reduced) frame.classList.add("drift");
+        ambient(shown.img, null);
+      }
+      return;
+    }
+    // hold: draw once, then wait (automatic changes stop once someone presses)
+    if (dirty) {
+      final(shown);
+      dirty = false;
+    }
+    if (!touched && !reduced && t > HOLD) go(false);
+  }, 60);
 }
 
 // ================================================================== how it works: scroll scrubs the drawing
@@ -493,9 +612,10 @@ function studio() {
 
   let busy = false;
   button.addEventListener("click", async () => {
-    if (busy) return;
+    if (busy) return engine.cancel();
     busy = true;
-    button.classList.add("busy");
+    engine.prepare();
+    const restore = engine.live() || engine.starting() ? asCancel(button) : (button.classList.add("busy"), () => {});
     const n = Number(count());
     const must = mustNow();
     // features Instant mode can't draw are made in Best quality (live, and from the saved Best faces)
@@ -524,6 +644,13 @@ function studio() {
       tag.classList.add("live");
     } catch (err) {
       off();
+      if (cancelled(err)) {
+        stop();
+        grid.dataset.count = prevCount;
+        grid.replaceChildren(...previous);
+        statusLine.textContent = "Cancelled. The faces before are back.";
+        return;
+      }
       const b = await bank();
       if (!b) {
         stop();
@@ -550,167 +677,12 @@ function studio() {
     } finally {
       busy = false;
       button.classList.remove("busy");
+      restore();
     }
   });
 }
 
-// ================================================================== 02 change one thing
-function editor() {
-  const box = $(".compare");
-  const a = $(".compare-a");
-  const b = $(".compare-b");
-  const pills = $(".edit-pills");
-  const status = $(".edit-status");
-  const mw = $(".m-without");
-  const mwith = $(".m-with");
-  const vw = $(".v-without");
-  const vwith = $(".v-with");
-  const lblR = $(".compare-lbl.r");
-  const btn = $(".btn-edit");
-  const presets = new Map(SITE.preset.edits.map((e) => [e.feature, e]));
-  let current = SITE.preset.edits[0];
-  let touched = false;
-  box.append(staticLayer());
-  box.classList.add("gone-static");
-
-  const setP = (p) => {
-    const w = box.clientWidth;
-    box.style.setProperty("--p", `${p}%`);
-    box.style.setProperty("--px", `${(p / 100) * w}px`);
-    box.setAttribute("aria-valuenow", Math.round(p));
-  };
-  new ResizeObserver(() => setP(parseFloat(box.style.getPropertyValue("--p")) || 50)).observe(box);
-  setP(50);
-
-  const render = async (e, live) => {
-    const [ia, ib] = await Promise.all([loadImage(e.without), loadImage(e.with)]);
-    a.src = ia.src;
-    b.src = ib.src;
-    a.alt = `The invented person without ${e.feature.toLowerCase()}`;
-    b.alt = `The same invented person with ${e.feature.toLowerCase()}`;
-    lblR.textContent = `With ${e.feature.toLowerCase()}`;
-    box.classList.remove("swap");
-    void box.offsetWidth;
-    box.classList.add("swap");
-    const [p0, , p2] = e.checker || [0, 0, 0];
-    mw.style.transform = `scaleX(${p0})`;
-    mwith.style.transform = `scaleX(${p2})`;
-    vw.textContent = pct(p0);
-    vwith.textContent = pct(p2);
-    status.textContent = live
-      ? `Live · ${hwLabel(e.hardware)} · ${e.quality === "best" ? "Best quality" : "Instant"} · ${e.seconds.toFixed(2)} s`
-      : `${madeEarlier(e.made_on || SITE.preset.made_on)}${e.of ? ` · person ${e.k + 1} of ${e.of}` : ""}`;
-    current = e;
-  };
-
-  const pill = (name, live) => {
-    const p = el("button", `pill${live ? " live-only" : ""}`, esc(name));
-    p.type = "button";
-    p.setAttribute("role", "radio");
-    p.setAttribute("aria-checked", String(name === current.feature));
-    p.addEventListener("click", () => {
-      $$(".pill", pills).forEach((x) => x.setAttribute("aria-checked", String(x === p)));
-      // a feature with a saved example shows it until live mode is on; live, every press draws someone new
-      if (presets.has(name) && !engine.live()) render(presets.get(name), false);
-      else ask(name, -1, true);
-    });
-    pills.append(p);
-  };
-  SITE.preset.edits.forEach((e) => pill(e.feature, false));
-  // saved mode: the bank has every feature, so every feature gets a pill
-  if (paused)
-    bank().then((b) =>
-      Object.keys(b?.edits || {})
-        .filter((f) => !presets.has(f) && b.edits[f].length)
-        .forEach((f) => pill(f, false)),
-    );
-  engine.onStatus((s) => {
-    if (s.state !== "ready" || pills.dataset.full) return;
-    pills.dataset.full = "1";
-    (s.info?.features || SITE.features)
-      .filter((f) => !presets.has(f) && f !== "Man")
-      .forEach((f) => pill(f, true));
-  });
-
-  let busy = false;
-  const turn = {}; // saved mode: which saved person each feature is showing
-  const ask = async (feature, seed, first = false) => {
-    if (busy) return;
-    busy = true;
-    btn.classList.add("busy");
-    box.classList.remove("gone-static");
-    const drawing = SITE.weak.includes(feature) ? "Drawing the same person twice, in Best quality…" : "Drawing the same person twice…";
-    const stop = ticking(status, paused && !engine.starting() ? "Finding another saved person…" : drawing);
-    const off = pleaseWait(stop, drawing);
-    try {
-      const r = await engine.call("edit", { feature_name: feature, quality: "instant", seed }, {
-        onProgress: (p) => p.pack === "best" && stop.label(progressWords(p, "")),
-      });
-      off();
-      stop();
-      await render(r, true);
-    } catch (err) {
-      off();
-      const list = (await bank())?.edits?.[feature];
-      if (!list?.length) {
-        stop();
-        status.textContent = err.message;
-        toast(err.message);
-        return;
-      }
-      await wait(450);
-      stop();
-      fellBack(err);
-      const k = first && turn[feature] == null ? 0 : ((turn[feature] ?? -1) + 1) % list.length;
-      turn[feature] = k;
-      await render({ ...list[k], feature, made_on: BANK.made_on, k, of: list.length }, false);
-    } finally {
-      busy = false;
-      btn.classList.remove("busy");
-      box.classList.add("gone-static");
-    }
-  };
-  btn.addEventListener("click", () => ask(current.feature, -1));
-
-  // drag, click, keys
-  const fromEvent = (e) => {
-    const r = box.getBoundingClientRect();
-    return clamp((e.clientX - r.left) / r.width, 0, 1) * 100;
-  };
-  let dragging = false;
-  box.addEventListener("pointerdown", (e) => {
-    dragging = touched = true;
-    box.setPointerCapture(e.pointerId);
-    setP(fromEvent(e));
-  });
-  box.addEventListener("pointermove", (e) => dragging && setP(fromEvent(e)));
-  box.addEventListener("pointerup", () => (dragging = false));
-  box.addEventListener("keydown", (e) => {
-    const p = parseFloat(box.style.getPropertyValue("--p")) || 50;
-    const d = { ArrowLeft: -5, ArrowRight: 5, Home: -100, End: 100 }[e.key];
-    if (d == null) return;
-    e.preventDefault();
-    touched = true;
-    setP(clamp(p + d, 0, 100));
-  });
-  // the first time it comes into view, the line sweeps once each way to show there are two pictures
-  box.addEventListener("reveal", () => {
-    if (reduced) return;
-    const keys = [50, 82, 18, 50];
-    const t0 = performance.now() + 500;
-    const stop = animate(null, (now) => {
-      if (touched) return stop();
-      const t = (now - t0) / 900;
-      if (t < 0) return;
-      const k = Math.min(keys.length - 2, Math.floor(t));
-      setP(lerp(keys[k], keys[k + 1], easeInOut(clamp(t - k))));
-      if (t >= keys.length - 1) stop();
-    });
-  }, { once: true });
-  render(current, false);
-}
-
-// ================================================================== 03 instant or best: the race
+// ================================================================== 02 instant or best: the race
 function race() {
   const box = $(".race");
   const lanes = $(".lanes");
@@ -795,9 +767,10 @@ function race() {
   let busy = false;
   let turn = -1;
   btn.addEventListener("click", async () => {
-    if (busy) return;
+    if (busy) return engine.cancel();
     busy = true;
-    btn.classList.add("busy");
+    engine.prepare();
+    const restore = engine.live() || engine.starting() ? asCancel(btn) : (btn.classList.add("busy"), () => {});
     const was = hw.textContent;
     const stop = ticking(hw, "Racing…");
     const off = pleaseWait(stop, "Racing…");
@@ -815,7 +788,8 @@ function race() {
     } catch (err) {
       off();
       stop();
-      hw.textContent = was;
+      hw.textContent = cancelled(err) ? "Cancelled." : was;
+      if (cancelled(err)) return;
       const list = (await bank())?.compares;
       if (!list?.length) return toast(err.message);
       fellBack(err);
@@ -824,11 +798,12 @@ function race() {
     } finally {
       busy = false;
       btn.classList.remove("busy");
+      restore();
     }
   });
 }
 
-// ================================================================== 04 is it AI-made?
+// ================================================================== 03 is it AI-made?
 function checker() {
   const drop = $(".drop");
   const input = $(".drop-input");
@@ -1033,13 +1008,22 @@ function storagePlace() {
 }
 
 /** Windows hands a browser the built-in graphics unless told otherwise: the steps to move it to the faster card. */
+/**
+ * On Windows, Chrome and Edge give every page the graphics chip the browser itself runs on, usually the built-in one
+ * on a laptop, and ignore a page's request for the faster one. One browser flag changes it (Chrome's WebGPU guide).
+ */
+const FLAG = { Chrome: "chrome", Edge: "edge", Brave: "brave", Opera: "opera" };
 const switchSteps = (name) => {
   const card = SPEEDS?.devices?.find((d) => d.kind === "gpu");
   const chip = SPEEDS?.devices?.find((d) => d.kind === "igpu");
   const x = card && chip ? Math.round(chip.instant_s / card.instant_s) : 0;
-  return `<p class="live-tip-title">Has this computer also got an NVIDIA or AMD graphics card?</p>
-  <p class="small">Windows gives ${esc(name)} the built-in chip unless you say otherwise, and a page can't choose.${x > 1 ? ` On the laptop measured below, the graphics card is ${x} times faster:` : ""}</p>
-  <ol class="small"><li>Open <b>Settings › System › Display › Graphics</b>.</li><li>Choose <b>${esc(name)}</b> (add it with <b>Browse</b> if it isn't listed) › <b>Options</b> › <b>High performance</b> › <b>Save</b>.</li><li>Close every ${esc(name)} window, open it again, and come back here.</li></ol>`;
+  const scheme = FLAG[engine.browser()];
+  const url = scheme ? `${scheme}://flags/#force-high-performance-gpu` : "";
+  return `<p class="live-tip-title">This is the built-in graphics. Got an NVIDIA or AMD card too?</p>
+  <p class="small">${esc(name)} gives every website the chip it runs on itself, and a website can't pick another.${x > 1 ? ` On the laptop measured below, the graphics card is ${x} times faster.` : ""} To use yours:</p>
+  ${url ? `<ol class="small"><li>Copy this into the address bar: <span class="flag"><code>${url}</code><button class="flag-copy" type="button" data-copy="${url}">Copy</button></span></li><li>Set <b>Force High Performance GPU</b> to <b>Enabled</b>, then press <b>Restart</b>.</li><li>Come back: this box will name your graphics card.</li></ol>
+  <p class="small">Or in Windows: Settings › System › Display › Graphics › ${esc(name)} › High performance.</p>`
+  : `<ol class="small"><li>Open <b>Settings › System › Display › Graphics</b>.</li><li>Choose <b>${esc(name)}</b> › <b>Options</b> › <b>High performance</b> › <b>Save</b>.</li><li>Restart ${esc(name)} and come back here.</li></ol>`}`;
 };
 
 async function live() {
@@ -1063,7 +1047,7 @@ async function live() {
   const storeHow = $(".live-store-how", dlg);
   const removeBtn = $(".live-remove", dlg);
   const strip = $(".gpu-strip-text");
-  const stripWas = strip.innerHTML;
+  let stripWasText = strip.innerHTML;
   try {
     YOU = JSON.parse(sessionStorage.getItem("hd-you") || "null");
   } catch {}
@@ -1080,11 +1064,22 @@ async function live() {
       strip.innerHTML = `<b>Please wait until it's running.</b> ${esc(engine.status.text.replace(/^Please wait · /, ""))}…`;
     } else {
       $$("[data-saved]").forEach((n) => (n.textContent = n.dataset.saved));
-      strip.innerHTML = stripWas;
+      strip.innerHTML = stripWasText;
     }
   };
   engine.onStatus(onLive);
   onLive();
+  const early = async () => {
+    const d = await engine.device();
+    if (d.mobile && !d.gpu) {
+      root.classList.add("no-live");
+      stripWasText = "<b>Faces the AI made earlier.</b> Live mode needs WebGPU, which this phone's browser doesn't have.";
+    } else if (d.gpu && d.builtIn && engine.os() === "windows") {
+      stripWasText = `<b>Runs on your GPU.</b> This browser is on the built-in ${esc(d.name)}: switch it to your graphics card for faster faces.`;
+    } else return;
+    if (!engine.live() && !engine.starting()) strip.innerHTML = stripWasText;
+  };
+  setTimeout(() => ("requestIdleCallback" in window ? requestIdleCallback(early, { timeout: 2000 }) : early()), 1200);
 
   const sizes = { core: await engine.packSize("core"), best: await engine.packSize("best") };
   const where = storagePlace();
@@ -1116,15 +1111,30 @@ async function live() {
       devNote.textContent =
         "It still works, on every core, but expect seconds a face, not a fraction of one. Chrome, Edge and Safari 26 have WebGPU.";
     }
-    if (d.mobile) devNote.textContent += " On a phone it may run out of memory: a laptop or desktop is the better place for it.";
+    const phoneNoGpu = d.mobile && !d.gpu;
+    if (phoneNoGpu) {
+      devName.textContent = "This phone's browser has no WebGPU";
+      devNote.textContent =
+        "Without it the AI would run on the phone's processor: too slow, and too much memory for a phone. Everything on this page still works, from faces the AI made earlier. Chrome on recent Android phones and Safari on iOS 26 have WebGPU.";
+    } else if (d.mobile) {
+      devNote.textContent += ` On a phone: use Wi-Fi for the download, and expect it to be slower than a laptop.${d.memory && d.memory < 4 ? ` This phone reports ${d.memory} GB of memory, which may not be enough: if the page reloads by itself, it ran out.` : ""}`;
+    }
     tip.hidden = !(d.gpu && d.builtIn && engine.os() === "windows");
-    if (!tip.hidden) tip.innerHTML = switchSteps(where.name);
+    if (!tip.hidden) {
+      tip.innerHTML = switchSteps(where.name);
+      $$("[data-copy]", tip).forEach((c) =>
+        c.addEventListener("click", () =>
+          navigator.clipboard.writeText(c.dataset.copy).then(() => (c.textContent = "Copied"), () => (c.textContent = "Select and copy")),
+        ),
+      );
+    }
     size.textContent = !sizes.core
       ? "This copy of the site has no models to run."
       : cached
         ? "Already on this computer: it starts in seconds."
         : `Downloads ${sizes.core} MB once. Best quality adds ${sizes.best} MB the first time you use it.`;
-    go.disabled = !sizes.core || engine.starting();
+    go.disabled = !sizes.core || engine.starting() || phoneNoGpu;
+    if (phoneNoGpu) size.textContent = "Live mode needs a laptop, a desktop, or a phone browser with WebGPU.";
     await store();
   };
 
@@ -1194,14 +1204,17 @@ async function live() {
   };
 
   go.addEventListener("click", async () => {
+    if (go.dataset.running) {
+      engine.cancel();
+      return;
+    }
     if (go.dataset.done) {
       dlg.close();
       $("#studio").scrollIntoView({ behavior: reduced ? "auto" : "smooth" });
       return;
     }
-    go.disabled = true;
     go.dataset.running = "1";
-    goText.textContent = "Please wait…";
+    goText.textContent = "Cancel";
     Object.keys(steps).forEach((k) => stepState(k, "todo"));
     stepState("download", "doing");
     bar.style.transform = "scaleX(0)";
@@ -1226,10 +1239,11 @@ async function live() {
       $$(".ladder-rows").forEach((x) => ladder(x));
       ready();
     } catch (err) {
+      if (engine.live()) return ready(); // cancelled during the speed test: it runs, just untimed
       waiting(false);
       waitBox.hidden = false;
-      progText.textContent = err.message;
-      goText.textContent = "Try again";
+      progText.textContent = cancelled(err) ? "Cancelled. What already downloaded is kept, so starting again picks up from there." : err.message;
+      goText.textContent = cancelled(err) ? "Download and run" : "Try again";
       go.disabled = false;
     } finally {
       delete go.dataset.running;
@@ -1280,7 +1294,6 @@ async function main() {
   TILES = noiseTiles(6, 256);
   chrome();
   polish();
-  demo();
   try {
     [SITE, SPEEDS] = await Promise.all([
       fetch("assets/site.json").then((r) => r.json()),
@@ -1294,7 +1307,7 @@ async function main() {
   scenes();
   stats();
   reveal();
-  const sections = [mosaic, how, studio, editor, race, checker, numbers, live];
+  const sections = [stage, how, studio, race, checker, numbers, live];
   for (const s of sections) {
     try {
       await s();

@@ -173,6 +173,20 @@ function rpc(op, args, onProgress) {
   });
 }
 
+/** Stop what the AI is doing (between two steps) and drop anything waiting; the page goes on as before. */
+export function cancel() {
+  if (!worker) return;
+  worker.postMessage({ op: "cancel" });
+  pending.forEach((p) => p.reject(new Error("CANCELLED")));
+  pending.clear();
+}
+
+// leaving or reloading the page: stop the AI at once, so the next page doesn't wait behind it
+addEventListener("pagehide", () => {
+  worker?.terminate();
+  worker = null;
+});
+
 let started = null; // init: resolves to {hardware, ep}
 const loaded = new Set();
 async function start() {
@@ -281,16 +295,21 @@ export async function remove() {
   }
 }
 
-/** On a return visit, after an earlier opt-in, load from this browser's storage without asking again. */
+/**
+ * A return visit, after an earlier opt-in: nothing loads with the page (a reload stays smooth); the first press of a
+ * button that needs the AI starts it from this browser's storage, without the dialog. Returns true if that applies.
+ */
+let remembered = false;
 export function resume() {
-  let opted = false;
   try {
-    opted = localStorage.getItem("hd-live") === "1";
+    remembered = localStorage.getItem("hd-live") === "1";
   } catch {}
-  if (!opted) return;
-  const go = () => goLive().catch(() => {});
-  if ("requestIdleCallback" in window) setTimeout(() => requestIdleCallback(go, { timeout: 3000 }), 1500);
-  else setTimeout(go, 1500);
+  return remembered;
+}
+
+/** Called by each button that uses the AI: on a return visit, start it now (the button then says to wait). */
+export function prepare() {
+  if (remembered && !live() && !starting()) goLive().catch(() => {});
 }
 
 // ------------------------------------------------------------------ requests
@@ -314,7 +333,7 @@ function dataUrlToBlob(s) {
 
 let running = 0;
 /**
- * Run an endpoint on this device: make, edit, compare, check. {onProgress({k, of, phase, retry})}.
+ * Run an endpoint on this device: make, compare, check. {onProgress({k, of, phase, retry})}.
  * Throws Error("NOT_LIVE") (in plain words) when live mode is off; "check" works either way (a 47 MB reader).
  */
 export async function call(name, payload = {}, { onProgress } = {}) {
@@ -335,7 +354,7 @@ export async function call(name, payload = {}, { onProgress } = {}) {
     }
     if (!live()) throw new Error(plain(new Error("NOT_LIVE")));
     // Instant mode can't draw some features (measured: a goatee in 0 of 16 faces), so those requests use Best quality
-    const asked = name === "make" ? payload.must || [] : name === "edit" ? [payload.feature_name] : [];
+    const asked = name === "make" ? payload.must || [] : [];
     const needBest = (payload.quality || "instant") === "instant" ? asked.filter((f) => extras.weak.includes(f)) : [];
     if (needBest.length) payload = { ...payload, quality: "best" };
     upgraded = needBest;
@@ -375,6 +394,7 @@ export function plain(err) {
   const m = String(err?.message || err || "");
   if (m === "NOT_LIVE") return "Live mode is off, so this shows results the AI made earlier.";
   if (m === "REMOVED") return "The AI was removed from this device.";
+  if (m === "CANCELLED") return "Cancelled.";
   if (m === "NO_MODELS") return "This copy of the site has no models to run, so it shows results the AI made earlier.";
   if (/quota|QuotaExceeded/i.test(m)) return "This browser has no room left to store the AI. Free some disk space and try again.";
   if (/out of memory|OOM|allocation|device.*lost|GPUDevice/i.test(m))
