@@ -29,7 +29,9 @@ def main() -> None:
     ap.add_argument("--url", default="http://localhost:8081/")
     a = ap.parse_args()
     with sync_playwright() as p:
-        b = p.chromium.launch(channel="msedge", args=["--force_high_performance_gpu"])  # no built-in-graphics note
+        b = p.chromium.launch(
+            channel="msedge", args=["--force_high_performance_gpu"]
+        )  # no built-in-graphics note
         page = b.new_page(viewport={"width": 1200, "height": 630}, device_scale_factor=1)
         page.add_init_script("sessionStorage.setItem('hd-intro', '1')")  # no intro in the picture
         page.goto(a.url, wait_until="load")

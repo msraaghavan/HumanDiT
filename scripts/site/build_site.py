@@ -82,7 +82,9 @@ def main() -> None:
     ap.add_argument("--worker", default="humandit", help="the Cloudflare Worker's name (its URL)")
     ap.add_argument("--out", default="dist/site")
     ap.add_argument("--no-models", action="store_true", help="build without site/models (saved results only)")
-    ap.add_argument("--pages", action="store_true", help="for Cloudflare Pages: no Worker config in the folder")
+    ap.add_argument(
+        "--pages", action="store_true", help="for Cloudflare Pages: no Worker config in the folder"
+    )
     a = ap.parse_args()
     out = ROOT / a.out
     if not (a.no_models or (SITE / "models" / "manifest.json").exists()):

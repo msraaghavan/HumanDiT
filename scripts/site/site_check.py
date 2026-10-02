@@ -383,7 +383,9 @@ def main() -> None:
         real_phone.wait_for_timeout(2000)
         check(
             "a phone gets the needs-a-laptop screen, and the website doesn't start",
-            real_phone.evaluate("HDGate.gated && !!document.querySelector('.gate') && document.querySelectorAll('.gate-face').length === 9"),
+            real_phone.evaluate(
+                "HDGate.gated && !!document.querySelector('.gate') && document.querySelectorAll('.gate-face').length === 9"
+            ),
             real_phone.inner_text(".gate-where"),
         )
         ctx.close()

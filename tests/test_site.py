@@ -31,7 +31,11 @@ def test_gate_runs_before_anything_draws():
     <head>, before the stylesheet and the page's module, in older JavaScript an old phone can still run."""
     html = (SITE / "index.html").read_text(encoding="utf-8")
     head = html.split("</head>")[0]
-    assert head.index('<script src="js/gate.js"></script>') < head.index("css/site.css") < head.index("js/main.js")
+    assert (
+        head.index('<script src="js/gate.js"></script>')
+        < head.index("css/site.css")
+        < head.index("js/main.js")
+    )
     gate = (SITE / "js" / "gate.js").read_text(encoding="utf-8")
     code = re.sub(r"//[^\n]*|\"[^\"\n]*\"|'[^'\n]*'", "", gate)  # comments and strings aside
     assert not re.search(r"=>|\?\.|\?\?|\bconst\b|\blet\b|`|\basync\b|\bclass\b", code)
@@ -48,7 +52,9 @@ def test_saved_results_are_complete():
     files = [h["src"] for h in pre["hero"]] + [f["src"] for f in pre["studio"]["faces"]]
     files += [r["img"] for r in pre["compare"]["runs"]]
     bank = json.loads((SITE / "assets" / "bank.json").read_text())
-    assert not {"blend", "edits"} & set(pre) and not {"blends", "edits"} & set(bank)  # both removed from the site
+    assert not {"blend", "edits"} & set(pre) and not {"blends", "edits"} & set(
+        bank
+    )  # both removed from the site
     assert all((SITE / f).exists() for f in files), [f for f in files if not (SITE / f).exists()]
     for h in pre["hero"]:  # a static amount per step, from all static down towards none
         assert len(h["noise_left"]) == h["n"] == 25
