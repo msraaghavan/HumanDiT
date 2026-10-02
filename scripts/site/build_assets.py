@@ -25,7 +25,6 @@ HERO_SEEDS = (4, 0, 1, 2)  # the showreel's hero seed first, then the next seeds
 EDIT_FEATURES = ("Glasses", "Smile", "Grey hair", "Blond hair", "Bangs", "Hat")
 EDIT_SEED = 4
 STUDIO_SEED = 42
-BLEND_SEEDS = (1, 2)
 COMPARE_SEED = 11
 # the project's story in measured FID-50k (clean): (eval file, plain name, technical name, what the site uses it for)
 SCOREBOARD = (
@@ -122,14 +121,6 @@ def main() -> None:
         )
         print(f"edit {feat}: checker {r['checker']}")
 
-    r = c.predict(quality="best", seed_a=BLEND_SEEDS[0], seed_b=BLEND_SEEDS[1], frames=24, api_name="/blend")
-    blend = {
-        "src": save_uri(r["src"], pre / "blend"),
-        "quality": "best",
-        **{k: r[k] for k in ("n", "cols", "size", "seeds", "seconds", "hardware")},
-    }
-    print(f"blend: {r['seconds']} s")
-
     r = c.predict(seed=COMPARE_SEED, feature_name="", api_name="/compare")
     compare = {
         "seed": r["seed"],
@@ -138,14 +129,12 @@ def main() -> None:
     }
     print("compare:", [(x["label"], x["seconds"]) for x in r["runs"]])
 
-    # the face wall, the watermark examples, the showreel and its poster (made by scripts/showreel/*)
+    # the face wall and the watermark examples (made by scripts/showreel/*)
     web = ROOT / "docs" / "assets"
     motion = json.loads((web / "web" / "motion.json").read_text())
     for src, dst in (
         (web / "web" / "faces.jpg", OUT / "faces.jpg"),
         (web / "web" / "edits.jpg", OUT / "edits.jpg"),
-        (web / "web" / "reel.mp4", OUT / "reel.mp4"),
-        (web / "showreel_poster.jpg", OUT / "reel_poster.jpg"),
         (web / "examples" / "humandit_face.png", OUT / "examples" / "humandit_face.png"),
         (web / "examples" / "old_project_face.png", OUT / "examples" / "old_project_face.png"),
     ):
@@ -197,7 +186,6 @@ def main() -> None:
             "hero": hero,
             "studio": studio,
             "edits": edits,
-            "blend": blend,
             "compare": compare,
             "check": check,
         },

@@ -5,7 +5,7 @@
 
 Until a visitor switches live mode on (the AI downloading to and running on their own device), the page answers
 from this bank: "Make faces" picks faces whose checker verdicts match what was ticked, "Try
-another person" and "Blend two new people" move to another saved result, "Race again" to another saved race. The bank
+another person" moves to another saved result, "Race again" to another saved race. The bank
 is uncurated: every output of every call is kept, made by the same endpoints the live page calls, with fixed seeds.
 Nothing is selected by eye.
 """
@@ -30,7 +30,6 @@ PLAN = {
     # faces: (quality, feature asked for or None, faces) -- unconditional faces cover "must not" requests
     "faces": [("instant", None, 240), ("best", None, 120), ("instant", "*", 16), ("best", "*", 8)],
     "edit_seeds": (21, 22, 23, 24, 25, 26),
-    "blend_pairs": ((31, 32), (33, 34), (35, 36), (37, 38), (39, 40)),
     "compare_seeds": (51, 52, 53, 54, 55),
 }
 SEED0 = {"instant": 100_000, "best": 200_000}  # face seeds: a fixed range per quality, one call of 8 per seed
@@ -100,18 +99,6 @@ def main() -> None:
             )
         print(f"edits seed {seed} done", flush=True)
 
-    blends = []
-    for sa, sb in PLAN["blend_pairs"]:
-        r = c.predict(quality="best", seed_a=sa, seed_b=sb, frames=24, api_name="/blend")
-        blends.append(
-            {
-                "src": raw(r["src"], OUT / f"blend_{sa}_{sb}.jpg"),
-                "quality": "best",
-                **{k: r[k] for k in ("n", "cols", "size", "seeds", "seconds", "hardware")},
-            }
-        )
-        print(f"blend {sa}-{sb}: {r['seconds']:.1f} s", flush=True)
-
     compares = []
     for s in PLAN["compare_seeds"]:
         r = c.predict(seed=s, feature_name="", api_name="/compare")
@@ -132,14 +119,13 @@ def main() -> None:
         "faces": faces,
         "sec_per_face": {q: round(t / max(1, n), 3) for q, (t, n) in seconds.items()},
         "edits": edits,
-        "blends": blends,
         "compares": compares,
     }
     (SITE / "assets" / "bank.json").write_text(json.dumps(bank, separators=(",", ":")))
     files = [f for f in OUT.rglob("*") if f.is_file()]
     print(
         f"bank: {len(faces['instant'])} + {len(faces['best'])} faces, {sum(len(v) for v in edits.values())} edits, "
-        f"{len(blends)} blends, {len(compares)} races; {len(files)} files, "
+        f"{len(compares)} races; {len(files)} files, "
         f"{sum(f.stat().st_size for f in files) / 2**20:.1f} MB; {(time.time() - t_start) / 60:.1f} min"
     )
 

@@ -36,7 +36,7 @@ async function wasmBinary() {
   return new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"))).arrayBuffer();
 }
 
-async function init({ base, manifest, ep, threads }) {
+async function init({ base, manifest, ep, threads, name }) {
   M = manifest;
   BASE = base;
   K = M.features.length;
@@ -51,7 +51,8 @@ async function init({ base, manifest, ep, threads }) {
     if (!a) throw new Error("NO_WEBGPU");
     const v = (a.info?.vendor || "").toLowerCase();
     const arch = a.info?.architecture || "";
-    HW = `your graphics chip (${[NAMES[v] || pretty(v), arch && pretty(arch)].filter(Boolean).join(" ") || "WebGPU"})`;
+    // the page names the chip from WebGL (a worker has no DOM); vendor and architecture are the fallback
+    HW = `your graphics chip (${name || [NAMES[v] || pretty(v), arch && pretty(arch)].filter(Boolean).join(" ") || "WebGPU"})`;
   } else {
     HW = `your processor (${threads} thread${threads > 1 ? "s" : ""})`;
   }
@@ -266,6 +267,51 @@ const MODE = { instant: "Instant (1-step GAN student)", best: `Best quality (tea
 const where = () => `in a web browser on ${HW}`;
 const r3 = (v) => Math.round(v * 1000) / 1000;
 
+// ------------------------------------------------------------------ getting what was asked for
+// The models follow a request most of the time, not every time (measured on the saved faces: Instant drew glasses
+// in 16 of 16, a man in 11 of 16). So each face is read by the checker while it is still a latent, before the
+// expensive decode, and a face it rejects is drawn again from new noise. A face that never passes keeps its closest
+// try, and its marks say so.
+const TRIES = { instant: 6, best: 2 };
+const noiseFor = (seed, round, n) => randn(round ? (seed + round * 1_000_003) % 2 ** 31 : seed, n * L);
+
+/** n latents that pass the checker on every asked choice ({j: "yes"|"no"}); returns {z, tries, misses}. */
+async function matching(quality, seed, n, choices, cfg, progress, what) {
+  const asked = choices.map((c, j) => [c, j]).filter(([c]) => c !== "any");
+  const passes = (p) => asked.every(([c, j]) => p[j] > 0.5 === (c === "yes"));
+  const closeness = (p) => asked.reduce((s, [c, j]) => s + Math.log(1e-6 + (c === "yes" ? p[j] : 1 - p[j])), 0);
+  const row = tokens(choices);
+  const z = new Float32Array(n * L);
+  const kept = new Array(n).fill(-Infinity);
+  const from = new Array(n).fill(0); // the round each kept face was drawn in (0: the seed's own noise)
+  let todo = [...Array(n).keys()];
+  let tries = 0;
+  const rounds = asked.length ? TRIES[quality] : 1;
+  for (let r = 0; r < rounds && todo.length; r++) {
+    const m = todo.length;
+    const all = noiseFor(seed, r, n);
+    const noise = new Float32Array(m * L);
+    todo.forEach((i, k) => noise.set(all.subarray(i * L, (i + 1) * L), k * L));
+    const of = quality === "best" ? M.steps : m;
+    const zz = await sample(quality, noise, repeat(row, m), m, cfg, (k) => progress({ k, of, what, retry: r, redraw: r ? m : 0 }));
+    tries += m;
+    const left = [];
+    todo.forEach((i, k) => {
+      const p = probs(zz, k);
+      const ok = passes(p);
+      const c = ok ? Infinity : closeness(p);
+      if (c > kept[i]) {
+        kept[i] = c;
+        from[i] = r;
+        z.set(zz.subarray(k * L, (k + 1) * L), i * L);
+      }
+      if (!ok) left.push(i);
+    });
+    todo = left;
+  }
+  return { z, tries, misses: todo.length, from };
+}
+
 // ------------------------------------------------------------------ endpoints (app/api.py)
 async function make({ count = 4, quality = "instant", must = [], never = [], seed = -1 }, progress) {
   const n = Math.max(1, Math.min(8, Number(count)));
@@ -273,11 +319,8 @@ async function make({ count = 4, quality = "instant", must = [], never = [], see
   const choices = new Array(K).fill("any");
   for (const f of never || []) choices[M.features.indexOf(f)] = "no";
   for (const f of must || []) choices[M.features.indexOf(f)] = "yes";
-  const attrs = repeat(tokens(choices), n);
-  const noise = randn(seed, n * L);
-  const steps = quality === "best" ? M.steps : n;
   let t = now();
-  const z = await sample(quality, noise, attrs, n, M.cfg.make, (k) => progress({ k, of: steps, what: "make" }));
+  const { z, tries, misses, from } = await matching(quality, seed, n, choices, M.cfg.make, progress, "make");
   const tGen = now() - t;
   const imgs = [];
   t = now();
@@ -292,7 +335,7 @@ async function make({ count = 4, quality = "instant", must = [], never = [], see
   for (let i = 0; i < n; i++) {
     const p = probs(z, i);
     faces.push({
-      png: await png(imgs[i], `${MODE[quality]}; seed ${seed} face ${i}; steps ${M.steps}; cfg ${M.cfg.make}; ig ${M.ig.scale}; attributes ${askedText}; made ${where()}`),
+      png: await png(imgs[i], `${MODE[quality]}; seed ${seed} face ${i}${from[i] ? ` redraw ${from[i]}` : ""}; steps ${M.steps}; cfg ${M.cfg.make}; ig ${M.ig.scale}; attributes ${askedText}; made ${where()}`),
       marks: choices
         .map((c, j) => [c, j])
         .filter(([c]) => c !== "any")
@@ -304,6 +347,8 @@ async function make({ count = 4, quality = "instant", must = [], never = [], see
   return {
     seed,
     quality,
+    tries, // faces drawn in all, counting the ones the checker sent back
+    misses, // faces still not matching after every try (shown with their closest try)
     faces,
     seconds: r3(sec),
     ms_per_face: { make: +(tGen / n).toFixed(1), decode: +(tDec / n).toFixed(1), mark: +(tWm / n).toFixed(1) },
@@ -315,50 +360,36 @@ async function edit({ feature_name = "Glasses", quality = "instant", seed = -1 }
   const j = M.features.indexOf(feature_name);
   if (j < 0) throw new Error(`Unknown feature: ${feature_name}`);
   seed = seedOr(seed);
-  const one = randn(seed, L);
-  const noise = new Float32Array(3 * L);
-  for (let i = 0; i < 3; i++) noise.set(one, i * L);
-  const attrs = new BigInt64Array(3 * K);
-  ["no", "any", "yes"].forEach((c, i) => (attrs[i * K + j] = BigInt(M.tokens[c])));
+  const attrs = new BigInt64Array(2 * K);
+  attrs[j] = BigInt(M.tokens.no);
+  attrs[K + j] = BigInt(M.tokens.yes);
+  // the same person twice, without and with the feature; if the checker doesn't see the change, try another person
   const t = now();
-  const z = await sample(quality, noise, attrs, 3, M.cfg.edit, (k) => progress({ k, of: quality === "best" ? M.steps : 3, what: "edit" }));
+  let z = null;
+  let best = -Infinity;
+  let used = seed;
+  for (let r = 0; r < TRIES[quality]; r++) {
+    const s = r ? (seed + r * 1_000_003) % 2 ** 31 : seed;
+    const one = randn(s, L);
+    const noise = new Float32Array(2 * L);
+    noise.set(one);
+    noise.set(one, L);
+    const of = quality === "best" ? M.steps : 2;
+    const zz = await sample(quality, noise, attrs, 2, M.cfg.edit, (k) => progress({ k, of, what: "edit", retry: r, redraw: r ? 1 : 0 }));
+    const [p0, p1] = [probs(zz, 0)[j], probs(zz, 1)[j]];
+    const c = p0 < 0.5 && p1 > 0.5 ? Infinity : Math.log(1e-6 + 1 - p0) + Math.log(1e-6 + p1);
+    if (c > best) [best, z, used] = [c, zz, s];
+    if (c === Infinity) break;
+  }
   const sec = (now() - t) / 1000;
   const out = {};
   const checker = [];
-  for (const [i, key, state] of [[0, "without", "absent"], [1, "choice", "any"], [2, "with", "present"]]) {
-    out[key] = await png(await mark(await decode(z, i)), `${MODE[quality]}; seed ${seed}; ${M.model_features[j]} ${state}; cfg ${M.cfg.edit}; made ${where()}`);
+  for (const [i, key, state] of [[0, "without", "absent"], [1, "with", "present"]]) {
+    out[key] = await png(await mark(await decode(z, i)), `${MODE[quality]}; seed ${used}; ${M.model_features[j]} ${state}; cfg ${M.cfg.edit}; made ${where()}`);
     checker.push(r3(probs(z, i)[j]));
   }
-  return { ...out, seed, feature: M.features[j], checker, seconds: r3(sec), hardware: HW, quality };
-}
-
-async function blend({ quality = "instant", seed_a = -1, seed_b = -1, frames = 24 }, progress) {
-  const n = Math.max(8, Math.min(32, Number(frames)));
-  const sa = seedOr(seed_a);
-  let sb = seedOr(seed_b);
-  if (sa === sb) sb += 1; // identical seeds make the slerp angle 0
-  const za = randn(sa, L);
-  const zb = randn(sb, L);
-  let dot = 0, na = 0, nb = 0;
-  for (let k = 0; k < L; k++) {
-    dot += za[k] * zb[k];
-    na += za[k] * za[k];
-    nb += zb[k] * zb[k];
-  }
-  const omega = Math.acos(Math.min(1 - 1e-6, Math.max(-1 + 1e-6, dot / Math.sqrt(na * nb))));
-  const noise = new Float32Array(n * L);
-  for (let f = 0; f < n; f++) {
-    const s = f / (n - 1);
-    const a = Math.sin((1 - s) * omega) / Math.sin(omega);
-    const b = Math.sin(s * omega) / Math.sin(omega);
-    for (let k = 0; k < L; k++) noise[f * L + k] = a * za[k] + b * zb[k];
-  }
-  const t = now();
-  const z = await sample(quality, noise, new BigInt64Array(n * K), n, 1, (k) => progress({ k, of: quality === "best" ? M.steps : n, what: "blend" }));
-  const sec = (now() - t) / 1000;
-  const imgs = [];
-  for (let i = 0; i < n; i++) imgs.push(await mark(await decode(z, i)));
-  return { src: await jpeg(imgs, 8, 0.84), n, cols: 8, size: SIZE, seeds: [sa, sb], seconds: r3(sec), hardware: HW, quality };
+  // [without, (no middle picture), with]: the shape the saved results use
+  return { ...out, seed: used, feature: M.features[j], checker: [checker[0], null, checker[1]], seconds: r3(sec), hardware: HW, quality };
 }
 
 async function compare({ seed = -1, feature_name = "" }, progress) {
@@ -417,7 +448,7 @@ async function check({ image }) {
   return { found: schemaOk && flips <= M.watermark.max_flips, size: [w, h], flips };
 }
 
-const ENDPOINTS = { make, edit, blend, compare, check };
+const ENDPOINTS = { make, edit, compare, check };
 
 // ------------------------------------------------------------------ messages: one job at a time, in order
 let queue = Promise.resolve();

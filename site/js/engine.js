@@ -33,6 +33,7 @@ export async function cached(pack) {
   const m = await manifest();
   if (!m) return false;
   try {
+    if (!(await caches.has("humandit-models"))) return false; // asking must not create it
     const c = await caches.open("humandit-models");
     const urls = m.packs[pack].flatMap((k) =>
       Array.from({ length: m.files[k].parts }, (_, i) => `${MODELS}${m.version}/${k}.${String(i).padStart(2, "0")}`),
@@ -49,9 +50,67 @@ const cpuThreads = (cores) => Math.max(1, Math.min(16, cores));
 
 let deviceP = null;
 const NAMES = { nvidia: "NVIDIA", amd: "AMD", intel: "Intel", apple: "Apple", qualcomm: "Qualcomm", arm: "Arm" };
+const SAYS = { nvidia: /nvidia|geforce|quadro|rtx/i, amd: /amd|radeon/i, intel: /intel/i, apple: /apple/i, qualcomm: /qualcomm|adreno/i, arm: /mali|arm/i };
+
 /**
- * {gpu, label, ep, threads, mobile, memory}: WebGPU when the browser has it (any brand of graphics chip, built-in
- * or separate), else the processor through WebAssembly on every core it lets a page use.
+ * The graphics chip's model name ("Intel UHD Graphics", "NVIDIA GeForce RTX 4070", "Apple M2"). WebGPU only gives a
+ * vendor and an architecture ("intel", "gen-9"), so the name comes from WebGL's renderer string, which Chrome and Edge
+ * fill in; other browsers give a generic name or none.
+ */
+function chipName() {
+  try {
+    const gl = document.createElement("canvas").getContext("webgl");
+    if (!gl) return "";
+    const ext = gl.getExtension("WEBGL_debug_renderer_info");
+    const raw = String(gl.getParameter(ext ? ext.UNMASKED_RENDERER_WEBGL : gl.RENDERER) || "");
+    gl.getExtension("WEBGL_lose_context")?.loseContext();
+    // "ANGLE (Intel, Intel(R) UHD Graphics (0x00009BC4) Direct3D11 vs_5_0 ps_5_0, D3D11)" -> "Intel UHD Graphics"
+    const inner = /^ANGLE \((.*)\)$/.exec(raw)?.[1].split(", ")[1] ?? raw;
+    return inner
+      .replace(/^ANGLE Metal Renderer:\s*/i, "")
+      .replace(/\s*\(0x[0-9a-f]+\).*$/i, "")
+      .replace(/\s+(Direct3D|OpenGL|Vulkan).*$/i, "")
+      .replace(/\/PCIe.*$|, or similar$/i, "")
+      .replace(/\((R|TM)\)|®|™/gi, "")
+      .replace(/\s+/g, " ")
+      .trim();
+  } catch {
+    return "";
+  }
+}
+
+/** A graphics chip built into the processor (shares its memory) rather than a separate graphics card. */
+const builtIn = (vendor, arch, name) =>
+  vendor === "intel"
+    ? !/arc|xe-hpg|alchemist|battlemage/i.test(`${arch} ${name}`)
+    : vendor === "amd"
+      ? /radeon graphics|vega \d+ graphics|radeon \d{3}m|^amd radeon$/i.test(name)
+      : vendor === "qualcomm" || vendor === "arm";
+
+/** Windows, macOS, Linux, Android, iOS: for the advice the page gives. */
+export const os = () => {
+  const ua = navigator.userAgent;
+  return /Windows/.test(ua) ? "windows" : /iPhone|iPad/.test(ua) ? "ios" : /Mac OS X|Macintosh/.test(ua) ? "mac" : /Android/.test(ua) ? "android" : /Linux|CrOS/.test(ua) ? "linux" : "";
+};
+
+/** Which browser this is, by name, for the advice the page gives. */
+export const browser = () => {
+  const ua = navigator.userAgent;
+  const brands = (navigator.userAgentData?.brands || []).map((b) => b.brand);
+  if (brands.includes("Microsoft Edge") || /Edg\//.test(ua)) return "Edge";
+  if (brands.includes("Brave")) return "Brave";
+  if (brands.includes("Opera") || /OPR\//.test(ua)) return "Opera";
+  if (/Firefox\//.test(ua)) return "Firefox";
+  if (brands.includes("Google Chrome") || /Chrome\//.test(ua)) return "Chrome";
+  if (/Safari\//.test(ua)) return "Safari";
+  return "";
+};
+
+/**
+ * {gpu, name, vendor, builtIn, label, ep, threads, mobile, memory, cores}: WebGPU when the browser has it (any brand
+ * of graphics chip, built-in or separate), else the processor through WebAssembly on every core it lets a page use.
+ * On Windows the browser, not the page, decides which chip WebGPU gets (it ignores "high-performance"): usually the
+ * built-in one on a laptop with two, unless Windows is told otherwise for that browser.
  */
 export const device = () =>
   (deviceP ||= (async () => {
@@ -61,15 +120,23 @@ export const device = () =>
     try {
       if (!cpuOnly) adapter = (await navigator.gpu?.requestAdapter({ powerPreference: "high-performance" })) || null;
     } catch {}
-    const v = (adapter?.info?.vendor || "").toLowerCase();
-    const arch = (adapter?.info?.architecture || "").replace(/-/g, " ");
+    const vendor = (adapter?.info?.vendor || "").toLowerCase();
+    const arch = adapter?.info?.architecture || "";
+    const named = adapter ? chipName() : "";
+    // WebGL and WebGPU normally sit on the same chip; if they disagree, trust WebGPU's vendor
+    const name = named && (!SAYS[vendor] || SAYS[vendor].test(named))
+      ? named
+      : [NAMES[vendor] || vendor, arch.replace(/-/g, " ")].filter(Boolean).join(" ") || "a WebGPU graphics chip";
     const cores = navigator.hardwareConcurrency || 4;
     const asked = Number(new URLSearchParams(location.search).get("threads")) || 0; // for measuring
     const threads = self.crossOriginIsolated ? asked || cpuThreads(cores) : 1;
     const mobile = navigator.userAgentData?.mobile ?? /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
     return {
       gpu: !!adapter,
-      label: adapter ? [NAMES[v] || v, arch].filter(Boolean).join(" ") || "a WebGPU graphics chip" : "",
+      name: adapter ? name : "",
+      vendor,
+      builtIn: !!adapter && builtIn(vendor, arch, name),
+      label: adapter ? name : `your processor (${threads} thread${threads > 1 ? "s" : ""})`,
       ep: adapter ? "webgpu" : "wasm",
       threads: adapter ? Math.min(4, threads) : threads,
       mobile,
@@ -113,7 +180,7 @@ async function start() {
     const [m, d] = await Promise.all([manifest(), device()]);
     if (!m) throw new Error("NO_MODELS");
     try {
-      return await rpc("init", { base: MODELS, manifest: m, ep: d.ep, threads: d.threads });
+      return await rpc("init", { base: MODELS, manifest: m, ep: d.ep, threads: d.threads, name: d.name });
     } catch (err) {
       if (d.ep !== "webgpu") throw err;
       // a graphics chip that offers WebGPU but can't open it: the processor still works
@@ -144,15 +211,32 @@ export const live = () => status.state === "ready" || status.state === "busy";
  * Switch live mode on: download (once) and prepare the models for Instant mode, then the page's buttons run on this
  * device. onProgress({phase, got, total, toFetch}).
  */
-export async function goLive(onProgress) {
-  if (live()) return status;
-  set("loading", "Loading the AI…");
+let liveP = null; // the start-up under way, so buttons pressed meanwhile wait for it instead of falling back
+const progressFns = new Set();
+export function goLive(onProgress) {
+  if (onProgress) progressFns.add(onProgress);
+  if (live()) return Promise.resolve(status);
+  return (liveP ||= startLive().finally(() => {
+    liveP = null;
+    progressFns.clear();
+  }));
+}
+
+/** True while the AI is downloading or preparing: the page asks people to wait until it is running. */
+export const starting = () => status.state === "loading";
+
+async function startLive() {
+  set("loading", "Please wait · starting the AI");
   try {
     const info = await start();
     await loadPacks(["core"], (p) => {
       const pct = p.total ? Math.floor((100 * p.got) / p.total) : 0;
-      set("loading", p.phase === "preparing" ? `Preparing the AI · ${pct}%` : `Loading the AI · ${pct}%`);
-      onProgress?.(p);
+      set(
+        "loading",
+        p.phase === "preparing" ? `Please wait · preparing the AI` : p.phase === "downloading" ? `Please wait · downloading ${pct}%` : `Please wait · loading ${pct}%`,
+        { progress: p },
+      );
+      progressFns.forEach((f) => f(p));
     });
     const m = await manifest();
     set("ready", `Live on ${info.hardware}`, {
@@ -166,6 +250,34 @@ export async function goLive(onProgress) {
   } catch (err) {
     set("saved", "Saved results", { error: plain(err) });
     throw new Error(plain(err));
+  }
+}
+
+// ------------------------------------------------------------------ storage: where the AI lives, and removing it
+/** Bytes this site keeps on this device (the models, mostly), as the browser counts them; null if it won't say. */
+export async function stored() {
+  try {
+    return (await navigator.storage.estimate()).usage ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Delete the downloaded AI from this browser and go back to saved results. */
+export async function remove() {
+  worker?.terminate();
+  worker = null;
+  started = null;
+  loaded.clear();
+  pending.forEach((p) => p.reject(new Error("REMOVED")));
+  pending.clear();
+  try {
+    localStorage.removeItem("hd-live");
+  } catch {}
+  try {
+    await caches.delete("humandit-models");
+  } finally {
+    set("saved", "Saved results", { hardware: "", info: null });
   }
 }
 
@@ -202,10 +314,11 @@ function dataUrlToBlob(s) {
 
 let running = 0;
 /**
- * Run an endpoint on this device: make, edit, blend, compare, check. {onProgress({k, of, phase})}.
+ * Run an endpoint on this device: make, edit, compare, check. {onProgress({k, of, phase, retry})}.
  * Throws Error("NOT_LIVE") (in plain words) when live mode is off; "check" works either way (a 47 MB reader).
  */
 export async function call(name, payload = {}, { onProgress } = {}) {
+  let upgraded = [];
   if (name === "check") {
     if (typeof payload.image === "string") payload = { ...payload, image: dataUrlToBlob(payload.image) };
     try {
@@ -214,7 +327,18 @@ export async function call(name, payload = {}, { onProgress } = {}) {
       throw new Error(plain(err));
     }
   } else {
+    if (starting() && liveP) {
+      // pressed while the AI is still starting: wait for it rather than answer from saved results
+      try {
+        await liveP;
+      } catch {}
+    }
     if (!live()) throw new Error(plain(new Error("NOT_LIVE")));
+    // Instant mode can't draw some features (measured: a goatee in 0 of 16 faces), so those requests use Best quality
+    const asked = name === "make" ? payload.must || [] : name === "edit" ? [payload.feature_name] : [];
+    const needBest = (payload.quality || "instant") === "instant" ? asked.filter((f) => extras.weak.includes(f)) : [];
+    if (needBest.length) payload = { ...payload, quality: "best" };
+    upgraded = needBest;
     if (payload.quality === "best" || name === "compare") {
       try {
         await loadPacks(["best"], (p) => {
@@ -231,10 +355,7 @@ export async function call(name, payload = {}, { onProgress } = {}) {
   if (live()) set("busy", "Working on your device…");
   try {
     const r = urls(await rpc("run", { name, payload }, onProgress));
-    if (name === "make" || name === "edit") {
-      const asked = name === "make" ? payload.must || [] : [payload.feature_name];
-      r.weak = (r.quality || payload.quality) === "instant" ? asked.filter((f) => extras.weak.includes(f)) : [];
-    }
+    r.upgraded = upgraded; // features that moved this request from Instant to Best quality
     if (name === "compare")
       r.runs.forEach((x) => {
         const f = extras.fids.find((y) => y.steps === x.steps);
@@ -253,6 +374,7 @@ export async function call(name, payload = {}, { onProgress } = {}) {
 export function plain(err) {
   const m = String(err?.message || err || "");
   if (m === "NOT_LIVE") return "Live mode is off, so this shows results the AI made earlier.";
+  if (m === "REMOVED") return "The AI was removed from this device.";
   if (m === "NO_MODELS") return "This copy of the site has no models to run, so it shows results the AI made earlier.";
   if (/quota|QuotaExceeded/i.test(m)) return "This browser has no room left to store the AI. Free some disk space and try again.";
   if (/out of memory|OOM|allocation|device.*lost|GPUDevice/i.test(m))

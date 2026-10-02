@@ -98,7 +98,33 @@ const progressWords = (p, doing) =>
     ? p.phase === "preparing"
       ? "Preparing the Best quality model for your device…"
       : `Downloading the Best quality model (once): ${Math.round(p.got / 1e6)} of ${Math.round(p.total / 1e6)} MB…`
-    : `${doing} ${p.k} of ${p.of}…`;
+    : p.redraw
+      ? `The checker sent ${p.redraw} face${p.redraw > 1 ? "s" : ""} back · redrawing: ${p.k} of ${p.of}…`
+      : `${doing} ${p.k} of ${p.of}…`;
+
+/**
+ * While the AI is still starting, a status line asks people to wait (and says how far along it is) rather than
+ * pretending to work; once it runs, the line goes back to `then`. Returns off().
+ */
+function pleaseWait(stop, then) {
+  if (!engine.starting()) return () => {};
+  const say = (s) => stop.label(`Please wait until the AI is running · ${s.text.replace(/^Please wait · /, "")}…`);
+  say(engine.status);
+  const off = engine.onStatus((s) => {
+    if (s.state === "loading") return say(s);
+    stop.label(then);
+    off();
+  });
+  return off;
+}
+
+/** How often Instant mode drew a feature when asked, from the saved faces (e.g. "0 of 16"), or "". */
+async function instantRate(f) {
+  const b = await bank();
+  const asked = (b?.faces?.instant || []).filter((x) => x.asked === f);
+  return asked.length ? `${asked.filter((x) => x.sees.includes(f)).length} of ${asked.length}` : "";
+}
+const listWords = (xs) => (xs.length < 2 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs.at(-1)}`).toLowerCase();
 
 // ================================================================== intro: the page denoises itself (once a visit)
 function intro() {
@@ -156,7 +182,10 @@ function intro() {
 function chrome() {
   const pill = $(".live-pill");
   const hero = $(".hero");
-  new IntersectionObserver(([e]) => pill.classList.toggle("show", !e.isIntersecting), { threshold: 0.15 }).observe(hero);
+  let away = false;
+  const place = () => pill.classList.toggle("show", away || engine.starting());
+  new IntersectionObserver(([e]) => ((away = !e.isIntersecting), place()), { threshold: 0.15 }).observe(hero);
+  engine.onStatus(place);
 }
 
 // ================================================================== pointer-driven polish
@@ -267,24 +296,6 @@ async function portrait() {
     meter.style.transform = `scaleX(${1 - noise})`;
   };
   animate(cv, show, 30);
-}
-
-function reel() {
-  const dlg = $(".reel");
-  const video = $(".reel-video");
-  $$("[data-reel]").forEach((b) =>
-    b.addEventListener("click", () => {
-      dlg.showModal();
-      video.play().catch(() => {});
-    }),
-  );
-  const close = () => {
-    video.pause();
-    dlg.close();
-  };
-  $(".reel-close").addEventListener("click", close);
-  dlg.addEventListener("click", (e) => e.target === dlg && close());
-  dlg.addEventListener("close", () => video.pause());
 }
 
 function ticker() {
@@ -434,7 +445,7 @@ function segmented(root, onChange) {
 
 // ================================================================== 01 make faces
 function studio() {
-  const quality = segmented($('.seg[data-name="quality"]'));
+  const quality = segmented($('.seg[data-name="quality"]'), () => hint());
   const count = segmented($('.seg[data-name="count"]'));
   const chips = $(".chips");
   const grid = $(".faces");
@@ -443,6 +454,16 @@ function studio() {
   const weakNote = $(".weak-note");
   const button = $(".btn-make");
   const NEXT = { any: "yes", yes: "no", no: "any" };
+  const mustNow = () => $$(".chip", chips).filter((c) => c.dataset.state === "yes").map((c) => c.dataset.feature);
+  // asking Instant mode for a feature it can't draw: say before the press that it will use Best quality
+  const hint = async () => {
+    const weak = quality() === "instant" ? mustNow().filter((f) => SITE.weak.includes(f)) : [];
+    if (!weak.length) return (weakNote.hidden = true);
+    const rates = (await Promise.all(weak.map(instantRate))).filter(Boolean);
+    const them = weak.length > 1 ? "them" : "it";
+    weakNote.textContent = `${listWords(weak).replace(/^./, (c) => c.toUpperCase())} ${weak.length > 1 ? "use" : "uses"} Best quality: Instant mode can't draw ${them}${rates.length ? ` (in a test it drew ${them} in ${rates.join(", ")} faces)` : ""}. Best quality is slower.`;
+    weakNote.hidden = false;
+  };
   const WORD = { any: "", yes: "must have", no: "must not have" };
   SITE.features.forEach((f) => {
     const c = el("button", "chip");
@@ -454,6 +475,7 @@ function studio() {
     c.addEventListener("click", () => {
       c.dataset.state = NEXT[c.dataset.state];
       c.setAttribute("aria-label", `${f}${WORD[c.dataset.state] ? `: ${WORD[c.dataset.state]}` : ""}`);
+      hint();
     });
     chips.append(c);
   });
@@ -556,16 +578,16 @@ function studio() {
     busy = true;
     button.classList.add("busy");
     const n = Number(count());
-    const q = quality();
-    const must = $$(".chip", chips).filter((c) => c.dataset.state === "yes").map((c) => c.dataset.feature);
+    const must = mustNow();
+    // features Instant mode can't draw are made in Best quality (live, and from the saved Best faces)
+    const q = quality() === "instant" && must.some((f) => SITE.weak.includes(f)) ? "best" : quality();
     const never = $$(".chip", chips).filter((c) => c.dataset.state === "no").map((c) => c.dataset.feature);
     const previous = [...grid.children];
     const prevCount = grid.dataset.count;
     placeholders(n);
-    weakNote.hidden = true;
-    const making = paused ? `Picking ${n} saved face${n > 1 ? "s" : ""}…` : `Making ${n} face${n > 1 ? "s" : ""}…`;
+    const making = paused && !engine.starting() ? `Picking ${n} saved face${n > 1 ? "s" : ""}…` : `Making ${n} face${n > 1 ? "s" : ""}…`;
     const stop = ticking(statusLine, making);
-    const off = () => {};
+    const off = pleaseWait(stop, making);
     try {
       const r = await engine.call("make", { count: n, quality: q, must, never, seed: -1 }, {
         onProgress: (p) => stop.label(progressWords(p, q === "best" ? "Cleaning up: step" : "Drawing face")),
@@ -573,14 +595,14 @@ function studio() {
       off();
       stop();
       await show(r.faces, true);
-      statusLine.innerHTML = `Made <b>${r.faces.length} face${r.faces.length > 1 ? "s" : ""}</b> in <b class="secs">0.00 s</b> on ${esc(r.hardware)}, ${q === "best" ? "best quality" : "Instant mode"}.`;
+      const back = r.tries - r.faces.length;
+      statusLine.innerHTML =
+        `Made <b>${r.faces.length} face${r.faces.length > 1 ? "s" : ""}</b> in <b class="secs">0.00 s</b> on ${esc(r.hardware)}, ${r.quality === "best" ? "Best quality" : "Instant mode"}.` +
+        (back > 0 ? ` The checker sent ${back} back to be redrawn.` : "") +
+        (r.misses ? ` ${r.misses} still miss${r.misses > 1 ? "" : "es"} something after every try: the marks say what.` : "");
       countTo($(".secs", statusLine), r.seconds, { dec: 2, dur: 900, suffix: " s" });
       tag.textContent = "Live · made on this device";
       tag.classList.add("live");
-      if (r.weak?.length) {
-        weakNote.textContent = `Instant mode is weak at ${r.weak.join(", ").toLowerCase()}: measured, it draws them in under half the faces. Try Best quality.`;
-        weakNote.hidden = false;
-      }
     } catch (err) {
       off();
       const b = await bank();
@@ -606,11 +628,6 @@ function studio() {
             : `Only <b>${r.matching}</b> of the ${r.pool} saved ${kind} faces match everything you asked; the rest match most of it.`;
       tag.textContent = `Saved · ${madeEarlier(b.made_on).toLowerCase()}`;
       tag.classList.remove("live");
-      const weak = q === "instant" ? must.filter((m) => SITE.weak.includes(m)) : [];
-      if (weak.length) {
-        weakNote.textContent = `Instant mode is weak at ${weak.join(", ").toLowerCase()}: measured, it draws them in under half the faces. Try Best quality.`;
-        weakNote.hidden = false;
-      }
     } finally {
       busy = false;
       button.classList.remove("busy");
@@ -662,7 +679,7 @@ function editor() {
     vw.textContent = pct(p0);
     vwith.textContent = pct(p2);
     status.textContent = live
-      ? `Live · ${hwLabel(e.hardware)} · Instant · ${e.seconds.toFixed(2)} s`
+      ? `Live · ${hwLabel(e.hardware)} · ${e.quality === "best" ? "Best quality" : "Instant"} · ${e.seconds.toFixed(2)} s`
       : `${madeEarlier(e.made_on || SITE.preset.made_on)}${e.of ? ` · person ${e.k + 1} of ${e.of}` : ""}`;
     current = e;
   };
@@ -702,12 +719,18 @@ function editor() {
     busy = true;
     btn.classList.add("busy");
     box.classList.remove("gone-static");
-    const stop = ticking(status, paused ? "Finding another saved person…" : "Drawing the same person twice…");
+    const drawing = SITE.weak.includes(feature) ? "Drawing the same person twice, in Best quality…" : "Drawing the same person twice…";
+    const stop = ticking(status, paused && !engine.starting() ? "Finding another saved person…" : drawing);
+    const off = pleaseWait(stop, drawing);
     try {
-      const r = await engine.call("edit", { feature_name: feature, quality: "instant", seed });
+      const r = await engine.call("edit", { feature_name: feature, quality: "instant", seed }, {
+        onProgress: (p) => p.pack === "best" && stop.label(progressWords(p, "")),
+      });
+      off();
       stop();
       await render(r, true);
     } catch (err) {
+      off();
       const list = (await bank())?.edits?.[feature];
       if (!list?.length) {
         stop();
@@ -767,113 +790,7 @@ function editor() {
   render(current, false);
 }
 
-// ================================================================== 03 blend
-function blender() {
-  const stage = $(".blend-stage");
-  const cv = $(".blend-canvas");
-  const ctx = fit(cv, 1.5, 800);
-  const ca = $(".blend-a").getContext("2d");
-  const cb = $(".blend-b").getContext("2d");
-  const range = $(".blend-range");
-  const status = $(".blend-status");
-  const btn = $(".btn-blend");
-  let meta = SITE.preset.blend;
-  let sheet = null;
-  let touchedAt = -1e9;
-  let last = -1;
-  let noise = 0;
-
-  const paint = (v) => {
-    if (!sheet) return;
-    const f = (v / 1000) * (meta.n - 1);
-    const i = Math.floor(f);
-    drawFrame(ctx, sheet, meta, i);
-    if (f - i > 0.001) drawFrame(ctx, sheet, meta, i + 1, f - i);
-    if (noise > 0.001) {
-      ctx.globalAlpha = noise;
-      ctx.drawImage(TILES[Math.floor(performance.now() / 70) % TILES.length], 0, 0, cv.width, cv.height);
-      ctx.globalAlpha = 1;
-    }
-    range.style.setProperty("--fill", `${v / 10}%`);
-  };
-  const load = async (m, live) => {
-    const im = await loadImage(m.src);
-    meta = m;
-    sheet = im;
-    drawFrame(ca, sheet, meta, 0);
-    drawFrame(cb, sheet, meta, meta.n - 1);
-    status.textContent = live
-      ? `Live · ${hwLabel(m.hardware)} · Instant · ${m.n} faces in ${m.seconds.toFixed(2)} s`
-      : `${madeEarlier(m.hardware)} · best quality${m.of ? ` · blend ${m.k + 1} of ${m.of}` : ""}`;
-    last = -1;
-  };
-  range.addEventListener("input", () => {
-    touchedAt = performance.now();
-    paint(Number(range.value));
-  });
-  load(meta, false);
-  const t0 = performance.now();
-  animate(stage, (now) => {
-    const idle = now - touchedAt > 3500;
-    if (idle && !reduced) {
-      // ping-pong A -> B -> A, easing at each end, while nobody is holding the slider
-      const u = ((now - t0) / 7000) % 1;
-      range.value = Math.round(1000 * easeInOut(u < 0.5 ? u * 2 : 2 - u * 2));
-    }
-    const v = Number(range.value);
-    if (v !== last || noise > 0) {
-      last = v;
-      paint(v);
-    }
-  }, 30);
-
-  let busy = false;
-  let turn = -1;
-  btn.addEventListener("click", async () => {
-    if (busy) return;
-    busy = true;
-    btn.classList.add("busy");
-    const stop = ticking(status, paused ? "Loading another saved blend…" : "Inventing two people and 22 in between…");
-    const fade = animate(null, () => (noise = Math.min(0.85, noise + 0.06)), 30);
-    try {
-      const r = await engine.call("blend", { quality: "instant", seed_a: -1, seed_b: -1, frames: 24 }, {
-        onProgress: (p) => stop.label(progressWords(p, "Drawing face")),
-      });
-      stop();
-      fade();
-      await load(r, true);
-      const out = animate(null, () => {
-        noise = Math.max(0, noise - 0.05);
-        if (!noise) out();
-      }, 30);
-    } catch (err) {
-      const list = (await bank())?.blends;
-      if (!list?.length) {
-        stop();
-        fade();
-        noise = 0;
-        status.textContent = err.message;
-        toast(err.message);
-        return;
-      }
-      await wait(500);
-      stop();
-      fade();
-      fellBack(err);
-      turn = (turn + 1) % list.length;
-      await load({ ...list[turn], k: turn, of: list.length }, false);
-      const out = animate(null, () => {
-        noise = Math.max(0, noise - 0.05);
-        if (!noise) out();
-      }, 30);
-    } finally {
-      busy = false;
-      btn.classList.remove("busy");
-    }
-  });
-}
-
-// ================================================================== 04 instant or best: the race
+// ================================================================== 03 instant or best: the race
 function race() {
   const box = $(".race");
   const lanes = $(".lanes");
@@ -962,12 +879,22 @@ function race() {
     busy = true;
     btn.classList.add("busy");
     const was = hw.textContent;
+    const stop = ticking(hw, "Racing…");
+    const off = pleaseWait(stop, "Racing…");
+    if (!engine.starting()) stop();
     try {
       const r = await engine.call("compare", { seed: -1, feature_name: "" }, {
-        onProgress: (p) => (hw.textContent = progressWords(p, "Racing: step")),
+        onProgress: (p) => {
+          stop();
+          hw.textContent = progressWords(p, "Racing: step");
+        },
       });
+      off();
+      stop();
       build(r, true);
     } catch (err) {
+      off();
+      stop();
       hw.textContent = was;
       const list = (await bank())?.compares;
       if (!list?.length) return toast(err.message);
@@ -981,7 +908,7 @@ function race() {
   });
 }
 
-// ================================================================== 05 is it AI-made?
+// ================================================================== 04 is it AI-made?
 function checker() {
   const drop = $(".drop");
   const input = $(".drop-input");
@@ -1150,6 +1077,51 @@ function ladder(root) {
   );
 }
 
+/**
+ * Where this browser keeps the downloaded AI on disk. Browsers store a site's data inside their own profile folder,
+ * in their own format (not the Downloads folder), so this names the folder; removing goes through the browser.
+ */
+function storagePlace() {
+  const b = engine.browser();
+  const os = engine.os();
+  const ff = location.origin.replace("://", "+++").replace(/:(\d+)$/, "+$1");
+  const W = "C:\\Users\\<you>\\AppData";
+  const PATHS = {
+    "windows Chrome": `${W}\\Local\\Google\\Chrome\\User Data\\Default\\Service Worker\\CacheStorage`,
+    "windows Edge": `${W}\\Local\\Microsoft\\Edge\\User Data\\Default\\Service Worker\\CacheStorage`,
+    "windows Brave": `${W}\\Local\\BraveSoftware\\Brave-Browser\\User Data\\Default\\Service Worker\\CacheStorage`,
+    "windows Firefox": `${W}\\Roaming\\Mozilla\\Firefox\\Profiles\\<profile>\\storage\\default\\${ff}\\cache`,
+    "mac Chrome": "~/Library/Application Support/Google/Chrome/Default/Service Worker/CacheStorage",
+    "mac Edge": "~/Library/Application Support/Microsoft Edge/Default/Service Worker/CacheStorage",
+    "mac Brave": "~/Library/Application Support/BraveSoftware/Brave-Browser/Default/Service Worker/CacheStorage",
+    "mac Firefox": `~/Library/Application Support/Firefox/Profiles/<profile>/storage/default/${ff}/cache`,
+    "linux Chrome": "~/.config/google-chrome/Default/Service Worker/CacheStorage",
+    "linux Edge": "~/.config/microsoft-edge/Default/Service Worker/CacheStorage",
+    "linux Brave": "~/.config/BraveSoftware/Brave-Browser/Default/Service Worker/CacheStorage",
+    "linux Firefox": `~/.mozilla/firefox/<profile>/storage/default/${ff}/cache`,
+  };
+  const path = PATHS[`${os} ${b}`] || "";
+  const name = b || "your browser";
+  const profile = /Default/.test(path) ? ' "Default" is the first browser profile; others are "Profile 1", "Profile 2" and so on.' : "";
+  const how =
+    b === "Firefox"
+      ? "the padlock left of the address bar › Clear cookies and site data"
+      : b === "Safari"
+        ? "Safari › Settings › Privacy › Manage Website Data › search for this site › Remove"
+        : "the icon left of the address bar › Site settings › Delete data";
+  return { name, path, profile, how };
+}
+
+/** Windows hands a browser the built-in graphics unless told otherwise: the steps to move it to the faster card. */
+const switchSteps = (name) => {
+  const card = SPEEDS?.devices?.find((d) => d.kind === "gpu");
+  const chip = SPEEDS?.devices?.find((d) => d.kind === "igpu");
+  const x = card && chip ? Math.round(chip.instant_s / card.instant_s) : 0;
+  return `<p class="live-tip-title">Has this computer also got an NVIDIA or AMD graphics card?</p>
+  <p class="small">Windows gives ${esc(name)} the built-in chip unless you say otherwise, and a page can't choose.${x > 1 ? ` On the laptop measured below, the graphics card is ${x} times faster:` : ""}</p>
+  <ol class="small"><li>Open <b>Settings › System › Display › Graphics</b>.</li><li>Choose <b>${esc(name)}</b> (add it with <b>Browse</b> if it isn't listed) › <b>Options</b> › <b>High performance</b> › <b>Save</b>.</li><li>Close every ${esc(name)} window, open it again, and come back here.</li></ol>`;
+};
+
 async function live() {
   const root = document.documentElement;
   const pill = $(".live-pill");
@@ -1159,11 +1131,19 @@ async function live() {
   const goText = $("span", go);
   const devName = $(".live-device-name", dlg);
   const devNote = $(".live-device-note", dlg);
+  const tip = $(".live-tip", dlg);
   const size = $(".live-size", dlg);
+  const waitBox = $(".live-wait", dlg);
+  const waitClock = $(".live-wait-clock", dlg);
   const bar = $(".live-bar i", dlg);
-  const prog = $(".live-progress", dlg);
   const progText = $(".live-progress-text", dlg);
+  const steps = Object.fromEntries($$(".live-steps li", dlg).map((li) => [li.dataset.step, li]));
+  const storeWhat = $(".live-store-what", dlg);
+  const storePath = $(".live-path", dlg);
+  const storeHow = $(".live-store-how", dlg);
+  const removeBtn = $(".live-remove", dlg);
   const strip = $(".gpu-strip-text");
+  const stripWas = strip.innerHTML;
   try {
     YOU = JSON.parse(sessionStorage.getItem("hd-you") || "null");
   } catch {}
@@ -1176,17 +1156,40 @@ async function live() {
     if (engine.live()) {
       $$("[data-saved]").forEach((n) => n.dataset.live && (n.textContent = n.dataset.live));
       strip.innerHTML = `<b>Live on ${esc(engine.status.hardware)}.</b> Every face below is made on this device; nothing is uploaded.`;
+    } else if (engine.starting()) {
+      strip.innerHTML = `<b>Please wait until it's running.</b> ${esc(engine.status.text.replace(/^Please wait · /, ""))}…`;
+    } else {
+      $$("[data-saved]").forEach((n) => (n.textContent = n.dataset.saved));
+      strip.innerHTML = stripWas;
     }
   };
   engine.onStatus(onLive);
   onLive();
 
   const sizes = { core: await engine.packSize("core"), best: await engine.packSize("best") };
+  const where = storagePlace();
+  const store = async () => {
+    const [used, has] = await Promise.all([engine.stored(), engine.cached("core")]);
+    const mb = used ? Math.round(used / 1e6) : 0;
+    storeWhat.textContent =
+      has || engine.live()
+        ? `On this computer now: ${mb ? `${mb} MB` : "the AI"}, inside ${where.name}'s own storage for this website (not your Downloads folder).`
+        : `When you switch it on, ${sizes.core} MB goes into ${where.name}'s own storage for this website, not your Downloads folder. Nothing else on your computer changes.`;
+    storePath.textContent = where.path;
+    storePath.hidden = !where.path;
+    const inside = /CacheStorage$/.test(where.path)
+      ? `This site's part is a sub-folder there with a long code for a name, in ${where.name}'s own format: don't delete it by hand.`
+      : `The files there are in ${where.name}'s own format: don't delete them by hand.`;
+    storeHow.textContent = `${where.path ? `${inside}${where.profile} ` : ""}To remove it, press the button below, or in ${where.name}: ${where.how}.`;
+    removeBtn.hidden = !(has || engine.live() || mb > 50);
+    removeBtn.dataset.mb = mb;
+  };
+
   const describe = async () => {
     const d = await engine.device();
     const cached = await engine.cached("core");
     if (d.gpu) {
-      devName.textContent = `Your graphics chip: ${d.label}`;
+      devName.textContent = `Your graphics chip: ${d.name}${d.builtIn ? " (built into the processor)" : ""}`;
       devNote.textContent = "It runs through WebGPU, which works on NVIDIA, AMD, Intel and Apple graphics alike.";
     } else {
       devName.textContent = `No WebGPU in this browser: your processor (${d.threads} thread${d.threads > 1 ? "s" : ""})`;
@@ -1194,30 +1197,81 @@ async function live() {
         "It still works, on every core, but expect seconds a face, not a fraction of one. Chrome, Edge and Safari 26 have WebGPU.";
     }
     if (d.mobile) devNote.textContent += " On a phone it may run out of memory: a laptop or desktop is the better place for it.";
+    tip.hidden = !(d.gpu && d.builtIn && engine.os() === "windows");
+    if (!tip.hidden) tip.innerHTML = switchSteps(where.name);
     size.textContent = !sizes.core
       ? "This copy of the site has no models to run."
       : cached
-        ? "Already on this device: it loads in seconds."
-        : `Downloads ${sizes.core} MB once and keeps it in this browser. Best quality adds ${sizes.best} MB the first time you use it.`;
-    go.disabled = !sizes.core;
+        ? "Already on this computer: it starts in seconds."
+        : `Downloads ${sizes.core} MB once. Best quality adds ${sizes.best} MB the first time you use it.`;
+    go.disabled = !sizes.core || engine.starting();
+    await store();
+  };
+
+  // the start-up, step by step: download (or read back), prepare for the chip, a short speed test
+  const stepState = (name, state, info = "") => {
+    const li = steps[name];
+    li.dataset.state = state;
+    $(".ls-info", li).textContent = info;
+  };
+  let clock = null;
+  const waiting = (on) => {
+    waitBox.hidden = !on;
+    clock?.();
+    clock = null;
+    if (!on) return;
+    const t0 = performance.now();
+    clock = animate(null, (now) => {
+      const s = Math.floor((now - t0) / 1000);
+      waitClock.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+    }, 4);
   };
 
   const ready = () => {
+    waiting(false);
     goText.textContent = "Start making faces";
     go.dataset.done = "1";
-    progText.textContent = YOU ? `Live on ${engine.status.hardware}: ${YOU.s.toFixed(2)} s a face.` : `Live on ${engine.status.hardware}.`;
-    bar.style.transform = "scaleX(1)";
+    go.disabled = false;
+    size.textContent = YOU ? `Running on ${engine.status.hardware}: ${YOU.s.toFixed(2)} s a face.` : `Running on ${engine.status.hardware}.`;
+    store();
   };
 
-  const open = () => {
+  const open = (e) => {
     if (!dlg.open) dlg.showModal();
     describe();
     $$(".live-ladder", dlg).forEach((r) => ladder(r));
     if (engine.live()) ready();
+    if (e?.currentTarget?.dataset?.store != null) $(".live-store", dlg).scrollIntoView({ block: "nearest" });
   };
   $$("[data-golive]").forEach((b) => b.addEventListener("click", open));
   $(".live-close", dlg).addEventListener("click", () => dlg.close());
   dlg.addEventListener("click", (e) => e.target === dlg && dlg.close());
+
+  // a return visit loads by itself (engine.resume): the steps follow it if the dialog is opened meanwhile
+  engine.onStatus((s) => {
+    if (go.dataset.running) return;
+    if (s.state === "loading" && s.progress) {
+      waiting(true);
+      show(s.progress);
+    } else if (engine.live() && dlg.open && !go.dataset.done) ready();
+  });
+  const show = (p) => {
+    const got = Math.round(p.got / 1e6);
+    const total = Math.round(p.total / 1e6);
+    if (p.phase === "downloading" || p.phase === "reading") {
+      stepState("download", "doing", p.phase === "reading" ? `already here, reading ${got} of ${total} MB` : `${got} of ${total} MB`);
+      bar.style.transform = `scaleX(${p.total ? p.got / p.total : 0})`;
+      progText.textContent = p.phase === "reading" ? "Reading the AI from this browser's storage." : "Downloading the AI. It's kept, so this happens once.";
+    } else if (p.phase === "preparing") {
+      stepState("download", "done", `${total} MB`);
+      stepState("prepare", "doing");
+      bar.style.transform = "scaleX(1)";
+      progText.textContent = "Preparing the AI for your graphics chip. This can take up to a minute, and the page may pause for a moment.";
+    } else if (p.phase === "ready") {
+      stepState("download", "done", `${total} MB`);
+      stepState("prepare", "done");
+    }
+  };
 
   go.addEventListener("click", async () => {
     if (go.dataset.done) {
@@ -1226,36 +1280,72 @@ async function live() {
       return;
     }
     go.disabled = true;
-    prog.hidden = false;
+    go.dataset.running = "1";
+    goText.textContent = "Please wait…";
+    Object.keys(steps).forEach((k) => stepState(k, "todo"));
+    stepState("download", "doing");
+    bar.style.transform = "scaleX(0)";
     progText.textContent = "Starting…";
+    waiting(true);
+    waitBox.scrollIntoView({ block: "nearest", behavior: reduced ? "auto" : "smooth" });
     try {
-      await engine.goLive((p) => {
-        bar.style.transform = `scaleX(${p.total ? p.got / p.total : 0})`;
-        progText.textContent =
-          p.phase === "preparing"
-            ? "Preparing the AI for your device (compiling it for your graphics chip)…"
-            : p.phase === "reading"
-              ? `Reading from this browser's storage: ${Math.round(p.got / 1e6)} of ${Math.round(p.total / 1e6)} MB`
-              : p.phase === "ready"
-                ? "Ready."
-                : `Downloading: ${Math.round(p.got / 1e6)} of ${Math.round(p.total / 1e6)} MB`;
-      });
-      // a speed test on this device: one face to warm up (the GPU compiles its programs), two timed
-      progText.textContent = "Timing this device: making three faces…";
+      await engine.goLive(show);
+      // a speed test on this device: one face to warm up (the chip compiles its programs), two timed
+      stepState("prepare", "done");
+      stepState("test", "doing", "face 1 of 3");
+      progText.textContent = "Timing this device: the first face is slower while the chip warms up.";
       await engine.call("make", { count: 1, quality: "instant", seed: 7 });
+      stepState("test", "doing", "faces 2 and 3 of 3");
       const r = await engine.call("make", { count: 2, quality: "instant", seed: 8 });
       const d = await engine.device();
-      YOU = { name: d.gpu ? d.label : `processor, ${d.threads} threads`, s: r.seconds / 2 };
+      YOU = { name: d.label, s: r.seconds / 2 };
       try {
         sessionStorage.setItem("hd-you", JSON.stringify(YOU));
       } catch {}
+      stepState("test", "done", `${YOU.s.toFixed(2)} s a face`);
       $$(".ladder-rows").forEach((x) => ladder(x));
       ready();
     } catch (err) {
+      waiting(false);
+      waitBox.hidden = false;
       progText.textContent = err.message;
       goText.textContent = "Try again";
-    } finally {
       go.disabled = false;
+    } finally {
+      delete go.dataset.running;
+    }
+  });
+
+  // remove: press twice (the second press says how much it frees)
+  removeBtn.addEventListener("click", async () => {
+    if (!removeBtn.dataset.sure) {
+      removeBtn.dataset.sure = "1";
+      removeBtn.textContent = `Press again to remove it${Number(removeBtn.dataset.mb) ? ` (${removeBtn.dataset.mb} MB)` : ""}`;
+      setTimeout(() => {
+        delete removeBtn.dataset.sure;
+        removeBtn.textContent = "Remove the AI from this computer";
+      }, 5000);
+      return;
+    }
+    delete removeBtn.dataset.sure;
+    removeBtn.disabled = true;
+    try {
+      await engine.remove();
+      YOU = null;
+      try {
+        sessionStorage.removeItem("hd-you");
+      } catch {}
+      delete go.dataset.done;
+      goText.textContent = "Download and run";
+      $$(".ladder-rows").forEach((x) => ladder(x));
+      await describe();
+      storeWhat.textContent = `Removed. ${storeWhat.textContent.replace(/^When you switch it on/, "If you switch it on again")}`;
+      toast("The AI was removed from this computer. The page shows saved results again.");
+    } catch (err) {
+      toast(`Couldn't remove it: ${err.message}`);
+    } finally {
+      removeBtn.disabled = false;
+      removeBtn.textContent = "Remove the AI from this computer";
     }
   });
 }
@@ -1271,7 +1361,6 @@ async function main() {
   document.documentElement.style.setProperty("--static", `url(${STATIC})`);
   TILES = noiseTiles(6, 256);
   chrome();
-  reel();
   polish();
   let introDone;
   try {
@@ -1300,7 +1389,7 @@ async function main() {
   reveal();
   const neon = $(".display .neon");
   if (neon && !reduced) setTimeout(() => neon.classList.add("flicker"), 700);
-  const sections = [portrait, how, studio, editor, blender, race, checker, numbers, live];
+  const sections = [portrait, how, studio, editor, race, checker, numbers, live];
   for (const s of sections) {
     try {
       await s();

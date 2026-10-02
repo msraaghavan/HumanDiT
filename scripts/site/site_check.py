@@ -4,9 +4,11 @@
     uv run python scripts/site/site_check.py [--url http://localhost:8081/] [--fps] [--cpu]
 
 Checks: no JavaScript errors and no missing files; the pixel-art town draws; every section starts from its saved
-results; the AI check reads both examples on this device; live mode downloads, prepares and times itself through the
-page's own buttons; then each tool answers live (faces that honour a ticked feature, Best quality, another person,
-a new blend, a race on this GPU); no emoji; no sideways scrolling on a phone. --cpu runs the AI on the processor
+results; the AI check reads both examples on this device; the live dialog names the graphics chip and says where the
+AI will be stored; live mode downloads, prepares and times itself through the page's own buttons, and a button pressed
+meanwhile says to wait and then runs live; each tool answers live (faces that honour a ticked feature, a feature
+Instant mode can't draw made in Best quality, another person, a race on this GPU); removing the AI empties the
+browser's storage; no emoji; no sideways scrolling on a phone. --cpu runs the AI on the processor
 (WebAssembly) instead of WebGPU. --fps also measures every requestAnimationFrame interval for a few seconds per scene.
 Exits non-zero if a check fails.
 """
@@ -148,14 +150,56 @@ def main() -> None:
         # ------------------------------------------------------------ switch live mode on, through the page
         page.evaluate("window.scrollTo(0, 0)")
         page.locator(".gpu-strip").click()
-        page.wait_for_timeout(600)
+        page.wait_for_timeout(800)
+        name = page.inner_text(".live-device-name")
         check(
-            "live dialog opens with the measured devices",
-            page.locator("dialog.live .lrow").count() >= 3,
-            page.inner_text(".live-device-name"),
+            "live dialog: the graphics chip by its model name",
+            bool(re.search(r"NVIDIA|GeForce|Radeon|Intel .*Graphics|Apple|processor", name))
+            and not re.search(r"\bgen[ -]?\d|turing", name, re.I),
+            name,
+        )
+        check("live dialog: the measured devices", page.locator("dialog.live .lrow").count() >= 3)
+        where = page.inner_text(".live-store")
+        check(
+            "live dialog: where the AI will be stored, and how to remove it",
+            "CacheStorage" in where and "not your Downloads folder" in where,
+            page.inner_text(".live-path"),
         )
         page.locator(".live-go").click()
+        page.wait_for_timeout(700)
+        check(
+            "live dialog: please wait, step by step",
+            page.is_visible(".live-wait") and "Please wait" in page.inner_text(".live-wait-title"),
+            " | ".join(page.locator(".live-steps li").all_inner_texts()),
+        )
         t0 = time.monotonic()
+        # close it while the AI starts and press a button: it must say to wait, then run live
+        page.locator(".live-close").click()
+        check(
+            "the pill says to wait while it starts",
+            "Please wait" in page.inner_text(".live-pill .engine-text"),
+            page.inner_text(".live-pill .engine-text"),
+        )
+        page.locator("#studio").scroll_into_view_if_needed()
+        page.locator(".chip", has_text="Glasses").click()
+        page.locator('.seg[data-name="count"] button[data-value="4"]').click()
+        page.locator(".btn-make").click()
+        page.wait_for_timeout(600)
+        said = page.inner_text(".results-status")
+        check(
+            "a button pressed while it starts: please wait",
+            "Please wait until the AI is running" in said,
+            said[:90],
+        )
+        wait_js(page, "document.querySelector('.results-tag').classList.contains('live')", timeout=600_000)
+        page.wait_for_timeout(1500)
+        caps = page.locator(".face-cap").all_inner_texts()
+        check(
+            "make faces live: 4 faces with glasses, each confirmed",
+            len(caps) == 4 and all("glasses" in c for c in caps) and page.locator(".mark.bad").count() == 0,
+            f"{page.inner_text('.results-status')} | {caps[0] if caps else ''}",
+        )
+        check("make faces live: each face downloadable", page.locator(".face-dl").count() == 4)
         wait_js(
             page,
             "document.querySelector('.live-go span').textContent === 'Start making faces'",
@@ -164,39 +208,32 @@ def main() -> None:
         check(
             "live mode: downloaded, prepared and timed",
             page.evaluate("document.documentElement.classList.contains('is-live')"),
-            f"{time.monotonic() - t0:.0f} s; {page.inner_text('.live-progress-text')}",
+            f"{time.monotonic() - t0:.0f} s; {page.inner_text('.live-size')}",
         )
-        check("live dialog: this device joins the ladder", page.locator("dialog.live .lrow.you").count() == 1)
-        page.locator(".live-go").click()
-        page.wait_for_timeout(1200)
+        check("this device joins the ladder", page.locator(".ladder .lrow.you").count() == 1)
 
-        # ------------------------------------------------------------ live: make faces with a feature
-        page.locator(".chip", has_text="Glasses").click()
-        page.locator('.seg[data-name="count"] button[data-value="4"]').click()
-        page.locator(".btn-make").click()
-        wait_js(page, "document.querySelector('.results-tag').classList.contains('live')", timeout=180_000)
-        page.wait_for_timeout(1500)
-        caps = page.locator(".face-cap").all_inner_texts()
-        check(
-            "make faces live: 4 faces, each judged on glasses",
-            len(caps) == 4 and all("glasses" in c for c in caps),
-            f"{page.inner_text('.results-status')} | {caps[0] if caps else ''}",
-        )
-        check("make faces live: each face downloadable", page.locator(".face-dl").count() == 4)
-
-        # ------------------------------------------------------------ live: Best quality (downloads its model once)
+        # ------------------------------------------------------------ live: a feature Instant can't draw -> Best quality
         page.locator(".chip", has_text="Glasses").click()
         page.locator(".chip", has_text="Glasses").click()  # back to "any"
+        page.locator(".chip", has_text="Goatee").click()
+        page.wait_for_timeout(400)
+        note = page.inner_text(".weak-note") if page.is_visible(".weak-note") else ""
+        check("asking Instant for a goatee: says it uses Best quality", "Best quality" in note, note[:110])
         page.locator('.seg[data-name="count"] button[data-value="1"]').click()
-        page.locator('.seg[data-name="quality"] button[data-value="best"]').click()
         page.locator(".btn-make").click()
         wait_js(
             page,
-            "/best quality/.test(document.querySelector('.results-status').textContent) && document.querySelector('.results-tag').classList.contains('live')",
+            "/^Made .*Best quality/.test(document.querySelector('.results-status').textContent)",
             timeout=600_000,
         )
-        check("make faces live: Best quality", True, page.inner_text(".results-status"))
-        page.locator('.seg[data-name="quality"] button[data-value="instant"]').click()
+        cap = page.inner_text(".face-cap")
+        check(
+            "make faces live: a goatee, in Best quality, confirmed",
+            "goatee" in cap and page.locator(".mark.bad").count() == 0,
+            page.inner_text(".results-status")[:110],
+        )
+        page.locator(".chip", has_text="Goatee").click()
+        page.locator(".chip", has_text="Goatee").click()  # back to "any"
 
         # ------------------------------------------------------------ live: change one thing
         page.locator("#edit").scroll_into_view_if_needed()
@@ -205,17 +242,6 @@ def main() -> None:
             page, "document.querySelector('.edit-status').textContent.startsWith('Live')", timeout=180_000
         )
         check("change one thing: another person, live", True, page.inner_text(".edit-status"))
-
-        # ------------------------------------------------------------ live: blend
-        page.locator("#blend").scroll_into_view_if_needed()
-        page.wait_for_timeout(800)
-        if a.fps:
-            fps["blend (playing)"] = page.evaluate(FPS_JS, 3000)
-        page.locator(".btn-blend").click()
-        wait_js(
-            page, "document.querySelector('.blend-status').textContent.startsWith('Live')", timeout=300_000
-        )
-        check("blend: two new people, live", True, page.inner_text(".blend-status"))
 
         # ------------------------------------------------------------ live: race on this GPU
         page.locator("#speed").scroll_into_view_if_needed()
@@ -229,7 +255,6 @@ def main() -> None:
             page.locator(".lane.done").count() == 4,
             page.inner_text(".race-hw"),
         )
-        check("speed ladder: this device measured", page.locator(".ladder .lrow.you").count() == 1)
 
         page.locator("#numbers").scroll_into_view_if_needed()
         page.wait_for_timeout(1500)
@@ -248,6 +273,25 @@ def main() -> None:
         text = page.evaluate("document.body.innerText")
         found = sorted(set(EMOJI.findall(text)))
         check("no emoji", not found, " ".join(found))
+
+        # ------------------------------------------------------------ remove the AI from this computer
+        page.locator(".footer-meta [data-store]").click()
+        page.wait_for_timeout(800)
+        page.locator(".live-remove").click()
+        check(
+            "remove: asks once more",
+            "Press again" in page.inner_text(".live-remove"),
+            page.inner_text(".live-remove"),
+        )
+        page.locator(".live-remove").click()
+        wait_js(page, "document.querySelector('.live-pill').dataset.state === 'saved'", timeout=30_000)
+        page.wait_for_timeout(500)
+        check(
+            "remove: the browser's copy is gone, back to saved results",
+            not page.evaluate("caches.has('humandit-models')"),
+            page.inner_text(".live-store-what")[:100],
+        )
+        page.locator(".live-close").click()
 
         # ------------------------------------------------------------ phone
         phone = b.new_page(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True)
