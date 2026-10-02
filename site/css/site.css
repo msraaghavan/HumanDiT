@@ -2489,6 +2489,19 @@ dialog.live[open] .live-box {
   height: 13px;
 }
 
+/* the not-found page */
+.missing {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: 100svh;
+  padding-bottom: 80px;
+}
+
+.missing .wordmark {
+  margin-bottom: 48px;
+}
+
 /* ------------------------------------------------------------------ responsive */
 @media (max-width: 980px) {
   .hero-grid,
