@@ -8,7 +8,7 @@ results; the AI check reads both examples on this device; the live dialog names 
 AI will be stored; live mode downloads, prepares and times itself through the page's own buttons, and a button pressed
 meanwhile says to wait and then runs live; each tool answers live (faces that honour a ticked feature, a feature
 Instant mode can't draw made in Best quality, another person, a race on this GPU); removing the AI empties the
-browser's storage; no emoji; no sideways scrolling on a phone. --cpu runs the AI on the processor
+browser's storage; no emoji; no sideways scrolling in a narrow window; a phone gets the needs-a-laptop screen. --cpu runs the AI on the processor
 (WebAssembly) instead of WebGPU. --fps also measures every requestAnimationFrame interval for a few seconds per scene.
 Exits non-zero if a check fails.
 """
@@ -352,7 +352,7 @@ def main() -> None:
         )
         page.locator(".live-close").click()
 
-        # ------------------------------------------------------------ phone
+        # ------------------------------------------------------------ a narrow window (a touch-screen PC passes the gate)
         phone = b.new_page(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True)
         phone.on("pageerror", lambda e: errors.append(str(e)))
         phone.goto(a.url, wait_until="load")
@@ -361,18 +361,32 @@ def main() -> None:
         over = phone.evaluate(
             "Math.max(innerWidth, document.documentElement.scrollWidth) - visualViewport.width"
         )
-        check("phone: nothing wider than the screen", over <= 0, f"{over:.0f}px")
+        check("narrow window: nothing wider than the screen", over <= 0, f"{over:.0f}px")
         phone.locator(".gpu-strip").click()
         phone.wait_for_timeout(1200)
         box = phone.evaluate(
             "(() => { const r = document.querySelector('dialog.live').getBoundingClientRect(); return [r.left, r.right, visualViewport.width] })()"
         )
         check(
-            "phone: the live dialog fits the screen",
+            "narrow window: the live dialog fits the screen",
             box[0] >= 0 and box[1] <= box[2],
             f"{box[0]:.0f} to {box[1]:.0f} of {box[2]:.0f}px",
         )
         phone.close()
+
+        # ------------------------------------------------------------ a real phone: the gate, not the website
+        dev = {k: v for k, v in p.devices["Pixel 7"].items() if k != "default_browser_type"}
+        ctx = b.new_context(**dev)
+        real_phone = ctx.new_page()
+        real_phone.on("pageerror", lambda e: errors.append(str(e)))
+        real_phone.goto(a.url, wait_until="load")
+        real_phone.wait_for_timeout(2000)
+        check(
+            "a phone gets the needs-a-laptop screen, and the website doesn't start",
+            real_phone.evaluate("HDGate.gated && !!document.querySelector('.gate') && document.querySelectorAll('.gate-face').length === 9"),
+            real_phone.inner_text(".gate-where"),
+        )
+        ctx.close()
 
         real = [e for e in errors if "favicon" not in e and "Failed to load resource" not in e]
         check("no JavaScript errors", not real, " | ".join(real)[:300])

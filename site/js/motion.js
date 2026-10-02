@@ -18,7 +18,9 @@ const watcher = new IntersectionObserver(
 );
 let raf = 0;
 
+const html = document.documentElement;
 function tick(now) {
+  if (html.classList.contains("gated")) return void (raf = 0);
   raf = requestAnimationFrame(tick);
   for (const j of jobs) {
     if (j.el && !onScreen.get(j.el)) continue;

@@ -79,13 +79,17 @@ function chipName() {
   }
 }
 
-/** A graphics chip built into the processor (shares its memory) rather than a separate graphics card. */
+/**
+ * A graphics chip built into the processor (sharing its memory) rather than a separate graphics card. Intel's
+ * separate cards are the Arc A-series and B570/B580 (Xe-HPG); "Arc Graphics", Arc 130V/140V and Arc B370/B390 are
+ * built in. AMD's built-in ones are "Radeon Graphics", Radeon 610M-890M, Radeon 8040S-8060S and Vega.
+ */
 const builtIn = (vendor, arch, name) =>
   vendor === "intel"
-    ? !/arc|xe-hpg|alchemist|battlemage/i.test(`${arch} ${name}`)
+    ? !(/hpg|12hp/i.test(arch) || /arc(?: pro)? (a\d{2,3}m?|b[5-9]\d\d)\b/i.test(name))
     : vendor === "amd"
-      ? /radeon graphics|vega \d+ graphics|radeon \d{3}m|^amd radeon$/i.test(name)
-      : vendor === "qualcomm" || vendor === "arm";
+      ? /radeon graphics|vega \d+ graphics|radeon \d{3}m\b|radeon 8\d\d0s|^amd radeon$/i.test(name)
+      : vendor === "apple" || vendor === "qualcomm" || vendor === "arm";
 
 /** Windows, macOS, Linux, Android, iOS: for the advice the page gives. */
 export const os = () => {
@@ -106,11 +110,15 @@ export const browser = () => {
   return "";
 };
 
+const pretty = (s) => s.replace(/-/g, " ").replace(/\b([a-z])/g, (c) => c.toUpperCase()).replace(/\b(Rdna|Gcn)\b/, (w) => w.toUpperCase());
+
 /**
- * {gpu, name, vendor, builtIn, label, ep, threads, mobile, memory, cores}: WebGPU when the browser has it (any brand
- * of graphics chip, built-in or separate), else the processor through WebAssembly on every core it lets a page use.
- * On Windows the browser, not the page, decides which chip WebGPU gets (it ignores "high-performance"): usually the
- * built-in one on a laptop with two, unless Windows is told otherwise for that browser.
+ * {gpu, name, vendor, builtIn, switchable, label, ep, threads, cores}: WebGPU's fastest graphics chip (any brand,
+ * built-in or separate), else the processor through WebAssembly on every core a page may use. The page asks for the
+ * "high-performance" chip, and so does the AI (js/ai/worker.js hands that same chip to ONNX Runtime): macOS browsers
+ * honour it, so a MacBook with two chips runs on the faster one. On Windows, Chrome and Edge ignore it and give every
+ * page the chip the browser itself runs on; `switchable` marks a Windows computer on built-in Intel or AMD graphics,
+ * where the page shows how to move the browser to a graphics card, if there is one.
  */
 export const device = () =>
   (deviceP ||= (async () => {
@@ -118,29 +126,32 @@ export const device = () =>
     // ?ai=cpu runs on the processor even where WebGPU exists (how the processor-only speed was measured)
     const cpuOnly = new URLSearchParams(location.search).get("ai") === "cpu";
     try {
-      if (!cpuOnly) adapter = (await navigator.gpu?.requestAdapter({ powerPreference: "high-performance" })) || null;
+      // js/gate.js has already made the same request: its answer is reused
+      if (!cpuOnly) adapter = (await (globalThis.HDGate?.adapter || navigator.gpu?.requestAdapter({ powerPreference: "high-performance" }))) || null;
     } catch {}
     const vendor = (adapter?.info?.vendor || "").toLowerCase();
     const arch = adapter?.info?.architecture || "";
     const named = adapter ? chipName() : "";
-    // WebGL and WebGPU normally sit on the same chip; if they disagree, trust WebGPU's vendor
+    // WebGL and WebGPU normally sit on the same chip. On a MacBook with two they can differ (WebGL takes the
+    // battery-saving one, the AI the fast one): then the name is WebGPU's vendor and architecture
     const name = named && (!SAYS[vendor] || SAYS[vendor].test(named))
       ? named
-      : [NAMES[vendor] || vendor, arch.replace(/-/g, " ")].filter(Boolean).join(" ") || "a WebGPU graphics chip";
+      : NAMES[vendor] || vendor
+        ? `${NAMES[vendor] || pretty(vendor)} graphics${arch ? ` (${pretty(arch)})` : ""}`
+        : "a WebGPU graphics chip";
     const cores = navigator.hardwareConcurrency || 4;
     const asked = Number(new URLSearchParams(location.search).get("threads")) || 0; // for measuring
     const threads = self.crossOriginIsolated ? asked || cpuThreads(cores) : 1;
-    const mobile = navigator.userAgentData?.mobile ?? /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
+    const inside = !!adapter && builtIn(vendor, arch, name);
     return {
       gpu: !!adapter,
       name: adapter ? name : "",
       vendor,
-      builtIn: !!adapter && builtIn(vendor, arch, name),
+      builtIn: inside,
+      switchable: inside && (vendor === "intel" || vendor === "amd") && os() === "windows",
       label: adapter ? name : `your processor (${threads} thread${threads > 1 ? "s" : ""})`,
       ep: adapter ? "webgpu" : "wasm",
       threads: adapter ? Math.min(4, threads) : threads,
-      mobile,
-      memory: navigator.deviceMemory || 0, // GB, rounded down and capped at 8 (Chrome only)
       cores,
     };
   })());
@@ -163,6 +174,7 @@ function rpc(op, args, onProgress) {
     w.onerror = (e) => {
       pending.forEach((p) => p.reject(new Error(e.message || "The AI stopped unexpectedly.")));
       pending.clear();
+      if (worker === w && live()) reset();
     };
     return w;
   })();
@@ -189,6 +201,20 @@ addEventListener("pagehide", () => {
 
 let started = null; // init: resolves to {hardware, ep}
 const loaded = new Set();
+
+/** Forget the running AI (it stays in storage): the next press starts it again, from this computer's copy. */
+function reset() {
+  worker?.terminate();
+  worker = null;
+  started = null;
+  loaded.clear();
+  remembered = true;
+  set("saved", "Saved results", { hardware: "", info: null });
+}
+
+/** The graphics chip went away under the AI: after sleep, a driver update or a driver crash. */
+const gpuLost = (err) =>
+  /device (is |was )?lost|lost device|device.*removed|DXGI_ERROR|GPU.*(lost|crash|hung|reset)/i.test(String(err?.message || err));
 async function start() {
   return (started ||= (async () => {
     const [m, d] = await Promise.all([manifest(), device()]);
@@ -324,6 +350,22 @@ const urls = (v) => {
   return v;
 };
 
+/** A picture file's pixels, as the page's own canvas decodes them: {data, width, height}. */
+async function pixelsOf(blob) {
+  let bmp;
+  try {
+    bmp = await createImageBitmap(blob, { imageOrientation: "none", colorSpaceConversion: "none", premultiplyAlpha: "none" });
+  } catch {
+    bmp = await createImageBitmap(blob).catch(() => null);
+  }
+  if (!bmp) throw new Error("That file is not a picture this can read.");
+  const cv = Object.assign(document.createElement("canvas"), { width: bmp.width, height: bmp.height });
+  const ctx = cv.getContext("2d", { willReadFrequently: true });
+  ctx.drawImage(bmp, 0, 0);
+  const { data, width, height } = ctx.getImageData(0, 0, cv.width, cv.height);
+  return { data, width, height };
+}
+
 function dataUrlToBlob(s) {
   const [head, body] = s.split(",");
   const type = /data:([^;]+)/.exec(head)?.[1] || "application/octet-stream";
@@ -342,6 +384,8 @@ export async function call(name, payload = {}, { onProgress } = {}) {
     if (typeof payload.image === "string") payload = { ...payload, image: dataUrlToBlob(payload.image) };
     try {
       await loadPacks(["check"], onProgress);
+      // a worker without OffscreenCanvas can't open picture files: the page decodes it and sends the pixels
+      if (!(await start()).offscreen && payload.image instanceof Blob) payload = { pixels: await pixelsOf(payload.image) };
     } catch (err) {
       throw new Error(plain(err));
     }
@@ -383,6 +427,10 @@ export async function call(name, payload = {}, { onProgress } = {}) {
       });
     return r;
   } catch (err) {
+    if (gpuLost(err)) {
+      reset();
+      throw new Error(plain(new Error("GPU_LOST")));
+    }
     throw new Error(plain(err));
   } finally {
     running--;
@@ -395,9 +443,11 @@ export function plain(err) {
   if (m === "NOT_LIVE") return "Live mode is off, so this shows results the AI made earlier.";
   if (m === "REMOVED") return "The AI was removed from this device.";
   if (m === "CANCELLED") return "Cancelled.";
+  if (m === "GPU_LOST")
+    return "Your graphics chip reset (this happens after sleep or a driver update). Press again: the AI restarts from this computer's copy.";
   if (m === "NO_MODELS") return "This copy of the site has no models to run, so it shows results the AI made earlier.";
   if (/quota|QuotaExceeded/i.test(m)) return "This browser has no room left to store the AI. Free some disk space and try again.";
-  if (/out of memory|OOM|allocation|device.*lost|GPUDevice/i.test(m))
+  if (/out of memory|OOM|allocation failed|failed to allocate/i.test(m))
     return "Your device ran out of memory for the AI. Close some tabs or other apps and try again.";
   if (/Download failed|Failed to fetch|NetworkError|network/i.test(m))
     return "The download was interrupted. Try again: the parts that arrived are kept.";

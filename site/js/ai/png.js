@@ -38,3 +38,25 @@ export async function withText(png, texts) {
   });
   return new Blob([src.subarray(0, ihdrEnd), ...chunks, src.subarray(ihdrEnd)], { type: "image/png" });
 }
+
+const SIGNATURE = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+
+/**
+ * RGBA pixels as a PNG, encoded here rather than by a canvas: for a browser whose workers have no OffscreenCanvas.
+ * Rows are stored unfiltered and squeezed by the browser's own zlib (CompressionStream "deflate" is the zlib format
+ * PNG wants): larger files than a canvas writes, the same pixels.
+ */
+export async function encodePng(rgba, w, h) {
+  const row = w * 4;
+  const raw = new Uint8Array((row + 1) * h); // each row: filter type 0, then its pixels
+  for (let y = 0; y < h; y++) raw.set(rgba.subarray(y * row, (y + 1) * row), y * (row + 1) + 1);
+  const z = new Response(new Blob([raw]).stream().pipeThrough(new CompressionStream("deflate")));
+  const ihdr = new Uint8Array(13);
+  const v = new DataView(ihdr.buffer);
+  v.setUint32(0, w);
+  v.setUint32(4, h);
+  ihdr[8] = 8; // bits a channel
+  ihdr[9] = 6; // RGBA
+  const idat = new Uint8Array(await z.arrayBuffer());
+  return new Blob([SIGNATURE, chunk("IHDR", ihdr), chunk("IDAT", idat), chunk("IEND", new Uint8Array(0))], { type: "image/png" });
+}

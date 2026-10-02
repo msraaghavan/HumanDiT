@@ -26,6 +26,20 @@ def test_page_references_exist():
     assert "fonts.googleapis.com" not in html
 
 
+def test_gate_runs_before_anything_draws():
+    """Phones, tablets and computers without a usable graphics chip get js/gate.js's screen: a classic script in
+    <head>, before the stylesheet and the page's module, in older JavaScript an old phone can still run."""
+    html = (SITE / "index.html").read_text(encoding="utf-8")
+    head = html.split("</head>")[0]
+    assert head.index('<script src="js/gate.js"></script>') < head.index("css/site.css") < head.index("js/main.js")
+    gate = (SITE / "js" / "gate.js").read_text(encoding="utf-8")
+    code = re.sub(r"//[^\n]*|\"[^\"\n]*\"|'[^'\n]*'", "", gate)  # comments and strings aside
+    assert not re.search(r"=>|\?\.|\?\?|\bconst\b|\blet\b|`|\basync\b|\bclass\b", code)
+    assert (SITE / "assets" / "gate.jpg").exists()
+    main = (SITE / "js" / "main.js").read_text(encoding="utf-8")
+    assert "HDGate" in main and "gate.ready" in main  # the website waits for the gate's answer
+
+
 def test_saved_results_are_complete():
     site = json.loads((SITE / "assets" / "site.json").read_text())
     assert len(site["features"]) == 12

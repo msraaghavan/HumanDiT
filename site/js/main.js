@@ -242,10 +242,13 @@ async function stage() {
   const ambient = (src, meta) => {
     const c = amb[1 - ambOn];
     const a = c.getContext("2d");
+    // a soft blur every browser draws alike (Safari's canvas has no filter): down to 16 pixels, smoothed back up
+    const t = (ambient.tiny ||= Object.assign(document.createElement("canvas"), { width: 16, height: 16 })).getContext("2d");
+    t.imageSmoothingQuality = a.imageSmoothingQuality = "high";
+    if (meta) t.drawImage(src, ((meta.n - 1) % meta.cols) * meta.size, Math.floor((meta.n - 1) / meta.cols) * meta.size, meta.size, meta.size, 0, 0, 16, 16);
+    else t.drawImage(src, 0, 0, 16, 16);
     a.clearRect(0, 0, c.width, c.height);
-    a.filter = "blur(3px)";
-    if (meta) a.drawImage(src, ((meta.n - 1) % meta.cols) * meta.size, Math.floor((meta.n - 1) / meta.cols) * meta.size, meta.size, meta.size, 0, 0, c.width, c.height);
-    else a.drawImage(src, 0, 0, c.width, c.height);
+    a.drawImage(ambient.tiny, 0, 0, c.width, c.height);
     amb[ambOn].classList.remove("on");
     c.classList.add("on");
     ambOn = 1 - ambOn;
@@ -1071,12 +1074,8 @@ async function live() {
   onLive();
   const early = async () => {
     const d = await engine.device();
-    if (d.mobile && !d.gpu) {
-      root.classList.add("no-live");
-      stripWasText = "<b>Faces the AI made earlier.</b> Live mode needs WebGPU, which this phone's browser doesn't have.";
-    } else if (d.gpu && d.builtIn && engine.os() === "windows") {
-      stripWasText = `<b>Runs on your GPU.</b> This browser is on the built-in ${esc(d.name)}: switch it to your graphics card for faster faces.`;
-    } else return;
+    if (!d.switchable) return;
+    stripWasText = `<b>Runs on your GPU.</b> This browser is on the built-in ${esc(d.name)}. If this computer also has an NVIDIA or AMD graphics card, switch the browser to it for faster faces.`;
     if (!engine.live() && !engine.starting()) strip.innerHTML = stripWasText;
   };
   setTimeout(() => ("requestIdleCallback" in window ? requestIdleCallback(early, { timeout: 2000 }) : early()), 1200);
@@ -1111,15 +1110,7 @@ async function live() {
       devNote.textContent =
         "It still works, on every core, but expect seconds a face, not a fraction of one. Chrome, Edge and Safari 26 have WebGPU.";
     }
-    const phoneNoGpu = d.mobile && !d.gpu;
-    if (phoneNoGpu) {
-      devName.textContent = "This phone's browser has no WebGPU";
-      devNote.textContent =
-        "Without it the AI would run on the phone's processor: too slow, and too much memory for a phone. Everything on this page still works, from faces the AI made earlier. Chrome on recent Android phones and Safari on iOS 26 have WebGPU.";
-    } else if (d.mobile) {
-      devNote.textContent += ` On a phone: use Wi-Fi for the download, and expect it to be slower than a laptop.${d.memory && d.memory < 4 ? ` This phone reports ${d.memory} GB of memory, which may not be enough: if the page reloads by itself, it ran out.` : ""}`;
-    }
-    tip.hidden = !(d.gpu && d.builtIn && engine.os() === "windows");
+    tip.hidden = !d.switchable;
     if (!tip.hidden) {
       tip.innerHTML = switchSteps(where.name);
       $$("[data-copy]", tip).forEach((c) =>
@@ -1133,8 +1124,7 @@ async function live() {
       : cached
         ? "Already on this computer: it starts in seconds."
         : `Downloads ${sizes.core} MB once. Best quality adds ${sizes.best} MB the first time you use it.`;
-    go.disabled = !sizes.core || engine.starting() || phoneNoGpu;
-    if (phoneNoGpu) size.textContent = "Live mode needs a laptop, a desktop, or a phone browser with WebGPU.";
+    go.disabled = !sizes.core || engine.starting();
     await store();
   };
 
@@ -1188,7 +1178,14 @@ async function live() {
   const show = (p) => {
     const got = Math.round(p.got / 1e6);
     const total = Math.round(p.total / 1e6);
-    if (p.phase === "downloading" || p.phase === "reading") {
+    if (p.phase === "preparing" && p.got < p.total) {
+      // one part has arrived and is being prepared while the rest still comes: the download step stays current
+      stepState("download", "doing", `${got} of ${total} MB`);
+      bar.style.transform = `scaleX(${p.got / p.total})`;
+      progText.textContent = p.toFetch
+        ? "Downloading the AI, and preparing each part as it arrives."
+        : "Reading the AI from this browser's storage, and preparing each part.";
+    } else if (p.phase === "downloading" || p.phase === "reading") {
       stepState("download", "doing", p.phase === "reading" ? `already here, reading ${got} of ${total} MB` : `${got} of ${total} MB`);
       bar.style.transform = `scaleX(${p.total ? p.got / p.total : 0})`;
       progText.textContent = p.phase === "reading" ? "Reading the AI from this browser's storage." : "Downloading the AI. It's kept, so this happens once.";
@@ -1286,6 +1283,10 @@ async function live() {
 
 // ================================================================== start
 async function main() {
+  // a phone, a tablet, or a computer without a graphics chip the AI can use: js/gate.js shows its own screen instead
+  const gate = window.HDGate;
+  if (gate?.gated) return;
+  addEventListener("hd-gated", () => engine.cancel());
   // saved mode: sentences that promise live drawing swap to their saved-mode wording before anything shows
   $$("[data-saved]").forEach((n) => ((n.dataset.live = n.textContent), (n.textContent = n.dataset.saved)));
   $$("[data-split]").forEach(split);
@@ -1304,6 +1305,7 @@ async function main() {
     toast("This page could not load its pictures. Try reloading.");
     throw err;
   }
+  if (gate && !(await gate.ready)) return;
   scenes();
   stats();
   reveal();

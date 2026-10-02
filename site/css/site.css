@@ -2469,14 +2469,6 @@ dialog.live[open] .live-box {
   font: 550 12px/1.4 var(--body);
 }
 
-/* a phone without WebGPU: no live-mode invitations it can't take up */
-.no-live .live-pill-go,
-.no-live .gpu-strip-go,
-.no-live .nudge,
-.no-live .ladder-go {
-  display: none;
-}
-
 /* a button that cancels while the AI works */
 .btn.cancelling {
   border-color: rgba(248, 113, 113, 0.5);
@@ -2500,6 +2492,272 @@ dialog.live[open] .live-box {
 
 .missing .wordmark {
   margin-bottom: 48px;
+}
+
+/* ------------------------------------------------------------------ the gate (js/gate.js)
+   Phones, tablets and computers that can't reach a graphics chip get one screen instead of the website: a box of
+   static where nine of the AI's faces bounce, spin and glitch, a stamp, and the way out. The words never move over
+   the faces: the chaos stays in its box. */
+html.gated body > :not(.gate) {
+  display: none !important;
+}
+
+.sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.gate {
+  min-height: 100vh;
+  min-height: 100svh;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas: "mark" "zone" "copy";
+  align-content: center;
+  gap: 20px;
+  padding: 18px 16px 32px;
+  max-width: 1180px;
+  margin: 0 auto;
+}
+
+.gate-zone {
+  position: relative;
+  height: clamp(230px, 40svh, 380px);
+  overflow: hidden;
+  border: 1px solid var(--line-2);
+  border-radius: 18px;
+  grid-area: zone;
+  background: #07080a;
+}
+
+.gate-static {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  opacity: 0.16;
+  image-rendering: pixelated;
+}
+
+.gate-faces {
+  position: absolute;
+  inset: 0;
+}
+
+.gate-face {
+  position: absolute;
+  left: 0;
+  top: 0;
+  max-width: none;
+  border-radius: 14px;
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.55);
+  cursor: grab;
+  touch-action: none;
+  will-change: transform;
+}
+
+.gate-stamp {
+  position: absolute;
+  left: 50%;
+  top: 46%;
+  z-index: 3;
+  padding: 6px 14px 7px;
+  border: 3px solid var(--accent);
+  border-radius: 10px;
+  background: rgba(7, 8, 10, 0.62);
+  color: var(--accent);
+  font: 800 clamp(17px, 4.4vw, 28px) / 1 var(--display);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  opacity: 0;
+  transform: translate(-50%, -50%) rotate(-12deg);
+  cursor: pointer;
+  user-select: none;
+}
+
+.gate-stamp.in {
+  opacity: 1;
+}
+
+.gate-stamp.slam {
+  animation: gate-slam 0.55s cubic-bezier(0.2, 1.5, 0.4, 1) forwards;
+}
+
+@keyframes gate-slam {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(2.8) rotate(-2deg);
+  }
+  55% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(0.9) rotate(-14deg);
+  }
+  100% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1) rotate(-12deg);
+  }
+}
+
+.gate-count {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  z-index: 3;
+  max-width: calc(100% - 20px);
+  padding: 4px 9px;
+  border-radius: 7px;
+  background: rgba(7, 8, 10, 0.72);
+  color: var(--dim);
+  font: 500 11.5px/1.4 var(--mono);
+}
+
+.gate-zone.shake {
+  animation: gate-shake 0.4s cubic-bezier(0.36, 0.07, 0.19, 0.97);
+}
+
+@keyframes gate-shake {
+  10%, 90% { transform: translate(-1px, 1px); }
+  20%, 80% { transform: translate(3px, -2px); }
+  30%, 50%, 70% { transform: translate(-5px, 2px) rotate(-0.4deg); }
+  40%, 60% { transform: translate(5px, -1px) rotate(0.4deg); }
+}
+
+.gate-copy {
+  grid-area: copy;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 0;
+}
+
+.gate-mark {
+  grid-area: mark;
+}
+
+.gate-kicker {
+  margin: 0 0 14px;
+  color: var(--accent);
+  font: 600 12px/1.4 var(--mono);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.gate-kicker::after {
+  content: "▍";
+  margin-left: 4px;
+  animation: gate-caret 1s steps(1) infinite;
+}
+
+@keyframes gate-caret {
+  50% {
+    opacity: 0;
+  }
+}
+
+.gate-title {
+  margin: 0;
+  color: #fff;
+  font: 750 clamp(40px, 10.5vw, 78px) / 1.0 var(--display);
+  letter-spacing: -0.035em;
+}
+
+.gate-line {
+  display: block;
+}
+
+.gw {
+  display: inline-block;
+  white-space: nowrap;
+}
+
+.gl {
+  display: inline-block;
+}
+
+.gl.hot {
+  color: var(--accent);
+}
+
+.gate-where {
+  margin: 10px 0 0;
+  color: var(--accent);
+  font: 650 clamp(24px, 6vw, 38px) / 1.15 var(--display);
+  letter-spacing: -0.02em;
+  transform-origin: 0 60%;
+  animation: gate-wobble 3.2s var(--ease-io) infinite;
+}
+
+@keyframes gate-wobble {
+  0%, 100% { transform: rotate(0deg); }
+  25% { transform: rotate(-1.6deg) translateX(2px); }
+  75% { transform: rotate(1.2deg) translateX(-1px); }
+}
+
+.gate-body {
+  margin: 22px 0 0;
+  max-width: 54ch;
+  color: var(--dim);
+  font-size: 16.5px;
+  line-height: 1.6;
+}
+
+.gate-ask {
+  margin: 18px 0 0;
+  max-width: 54ch;
+  padding-left: 14px;
+  border-left: 2px solid var(--accent);
+  color: var(--text);
+  font-size: 16.5px;
+  font-weight: 550;
+  line-height: 1.55;
+}
+
+.gate-flag {
+  padding: 1px 6px;
+  border: 1px solid var(--line-2);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.04);
+  color: #fff;
+  font: 500 13px/1.5 var(--mono);
+  overflow-wrap: anywhere;
+}
+
+.gate-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 24px;
+}
+
+.gate-note {
+  margin: 18px 0 0;
+  color: var(--mute);
+  font-size: 14px;
+}
+
+@media (min-width: 900px) {
+  .gate {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-areas: "mark mark" "copy zone";
+    align-content: center;
+    align-items: center;
+    gap: clamp(32px, 5vw, 72px);
+    padding: 40px 32px;
+  }
+
+  .gate-zone {
+    height: min(560px, 74vh);
+  }
+
+  .gate-title {
+    font-size: clamp(44px, 4.8vw, 72px);
+  }
 }
 
 /* ------------------------------------------------------------------ responsive */
@@ -2670,5 +2928,9 @@ dialog.live[open] .live-box {
 
   .ticker-track {
     animation: none !important;
+  }
+
+  .gate-stamp {
+    opacity: 1;
   }
 }

@@ -4,7 +4,7 @@
 // Python engine (app/api.py) and answers in the same shape; the page cannot tell them apart except by the speed.
 
 import * as ort from "../../vendor/ort/ort.webgpu.min.mjs";
-import { withText } from "./png.js";
+import { encodePng, withText } from "./png.js";
 import { resizeRGB } from "./resize.js";
 import { randn } from "./rng.js";
 import { load, prune, stored } from "./store.js";
@@ -59,6 +59,8 @@ async function init({ base, manifest, ep, threads, name }) {
   if (EP === "webgpu") {
     const a = await navigator.gpu?.requestAdapter({ powerPreference: "high-performance" });
     if (!a) throw new Error("NO_WEBGPU");
+    // without this, ONNX Runtime asks for a chip with no preference: on a MacBook with two, the slower one
+    ort.env.webgpu.adapter = a;
     const v = (a.info?.vendor || "").toLowerCase();
     const arch = a.info?.architecture || "";
     // the page names the chip from WebGL (a worker has no DOM); vendor and architecture are the fallback
@@ -67,7 +69,7 @@ async function init({ base, manifest, ep, threads, name }) {
     HW = `your processor (${threads} thread${threads > 1 ? "s" : ""})`;
   }
   prune(M.version);
-  return { hardware: HW, ep: EP };
+  return { hardware: HW, ep: EP, offscreen };
 }
 
 /** Download (or read from storage), verify and prepare every file of these packs. */
@@ -257,11 +259,17 @@ function canvas(w, h) {
   const cv = new OffscreenCanvas(w, h);
   return [cv, cv.getContext("2d")];
 }
+// every browser with WebGPU has OffscreenCanvas in workers; one without it still gets its pictures (as PNGs)
+const offscreen = typeof OffscreenCanvas === "function";
 
 async function png(rgba, details) {
-  const [cv, ctx] = canvas(SIZE, SIZE);
-  ctx.putImageData(new ImageData(rgba, SIZE, SIZE), 0, 0);
-  return withText(await cv.convertToBlob({ type: "image/png" }), {
+  let blob;
+  if (offscreen) {
+    const [cv, ctx] = canvas(SIZE, SIZE);
+    ctx.putImageData(new ImageData(rgba, SIZE, SIZE), 0, 0);
+    blob = await cv.convertToBlob({ type: "image/png" });
+  } else blob = await encodePng(rgba, SIZE, SIZE);
+  return withText(blob, {
     "AI-generated": "true",
     Generator: "HumanDiT (RAEv2 + DiT^DH), research demo; synthetic person, not a real individual",
     Details: details,
@@ -270,6 +278,16 @@ async function png(rgba, details) {
 
 async function jpeg(frames, cols, quality) {
   const rows = Math.ceil(frames.length / cols);
+  if (!offscreen) {
+    const W = cols * SIZE;
+    const sheet = new Uint8ClampedArray(W * rows * SIZE * 4);
+    frames.forEach((f, i) => {
+      const x0 = (i % cols) * SIZE;
+      const y0 = Math.floor(i / cols) * SIZE;
+      for (let y = 0; y < SIZE; y++) sheet.set(f.subarray(y * SIZE * 4, (y + 1) * SIZE * 4), ((y0 + y) * W + x0) * 4);
+    });
+    return encodePng(sheet, W, rows * SIZE);
+  }
   const [cv, ctx] = canvas(cols * SIZE, rows * SIZE);
   frames.forEach((f, i) => ctx.putImageData(new ImageData(f, SIZE, SIZE), (i % cols) * SIZE, Math.floor(i / cols) * SIZE));
   return cv.convertToBlob({ type: "image/jpeg", quality });
@@ -402,24 +420,39 @@ async function compare({ seed = -1, feature_name = "" }, progress) {
   return { seed, runs: out, hardware: HW };
 }
 
-/** Is the HumanDiT watermark in this picture? trustmark.TrustMark.decode, then its BCH check as a distance test. */
-async function check({ image }) {
-  let bmp;
-  try {
-    bmp = await createImageBitmap(image, { imageOrientation: "none", colorSpaceConversion: "none", premultiplyAlpha: "none" });
-  } catch {
-    bmp = await createImageBitmap(image).catch(() => null);
+/**
+ * Is the HumanDiT watermark in this picture? trustmark.TrustMark.decode, then its BCH check as a distance test.
+ * {image}: a picture file; or {pixels: {data, width, height}}, decoded by the page (a worker without OffscreenCanvas).
+ */
+async function check({ image, pixels }) {
+  let w, h, px;
+  if (pixels) ({ width: w, height: h, data: px } = pixels);
+  else {
+    let bmp;
+    try {
+      bmp = await createImageBitmap(image, { imageOrientation: "none", colorSpaceConversion: "none", premultiplyAlpha: "none" });
+    } catch {
+      bmp = await createImageBitmap(image).catch(() => null);
+    }
+    if (!bmp) throw new Error("That file is not a picture this can read.");
+    [w, h] = [bmp.width, bmp.height];
+    const [, ctx] = canvas(w, h);
+    ctx.drawImage(bmp, 0, 0);
+    px = ctx.getImageData(0, 0, w, h).data;
   }
-  if (!bmp) throw new Error("That file is not a picture this can read.");
-  const [w, h] = [bmp.width, bmp.height];
   // TrustMark reads a centred square from very long pictures (aspect over 2), the whole picture otherwise
   const sq = Math.max(w, h) / Math.min(w, h) > 2 ? Math.min(w, h) : 0;
   const [cw, ch] = sq ? [sq, sq] : [w, h];
-  const [cv, ctx] = canvas(cw, ch);
-  ctx.drawImage(bmp, sq ? Math.floor((w - sq) / 2) : 0, sq ? Math.floor((h - sq) / 2) : 0, cw, ch, 0, 0, cw, ch);
-  const px = ctx.getImageData(0, 0, cw, ch).data;
+  const [x0, y0] = sq ? [Math.floor((w - sq) / 2), Math.floor((h - sq) / 2)] : [0, 0];
   const rgb = new Uint8Array(cw * ch * 3);
-  for (let p = 0; p < cw * ch; p++) rgb.set(px.subarray(p * 4, p * 4 + 3), p * 3);
+  for (let y = 0; y < ch; y++)
+    for (let x = 0; x < cw; x++) {
+      const a = ((y0 + y) * w + x0 + x) * 4;
+      const b = (y * cw + x) * 3;
+      rgb[b] = px[a];
+      rgb[b + 1] = px[a + 1];
+      rgb[b + 2] = px[a + 2];
+    }
   const R = M.watermark.dec_res;
   const small = resizeRGB(rgb, cw, ch, R, R);
   const x = new Float32Array(3 * R * R);
